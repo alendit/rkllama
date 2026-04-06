@@ -7,6 +7,7 @@ import base64
 import os
 import re  # Add import for regex used in JSON extraction
 import uuid
+from typing import Any
 import rkllama.api.variables as variables
 from transformers import AutoTokenizer
 from flask import jsonify, Response, stream_with_context
