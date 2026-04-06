@@ -118,6 +118,46 @@ def test_server_utils_tokenizer_falls_back_to_slow(monkeypatch):
     ]
 
 
+def test_server_utils_prefers_tokenizer_modelfile_value(monkeypatch, tmp_path):
+    module = _load_server_utils_module(monkeypatch)
+    model_root = tmp_path / "models"
+    model_root.mkdir()
+    local_tokenizer_path = model_root / "phi3:mini" / "tokenizer"
+
+    monkeypatch.setattr(module.rkllama.config, "get_path", lambda name: str(model_root))
+
+    def fake_get_property(model_name, key, models_path):
+        assert model_name == "phi3:mini"
+        assert models_path == str(model_root)
+        if key == "TOKENIZER":
+            return '"microsoft/Phi-3-mini-4k-instruct"'
+        if key == "HUGGINGFACE_PATH":
+            return '"GatekeeperZA/Phi-3-mini-4k-instruct-RKLLM-v1.2.3"'
+        return None
+
+    calls = []
+
+    class FakeTokenizer:
+        def save_pretrained(self, path):
+            calls.append(("save_pretrained", path))
+
+    monkeypatch.setattr(module, "get_property_modelfile", fake_get_property)
+    monkeypatch.setattr(module.os.path, "isdir", lambda path: False)
+    monkeypatch.setattr(
+        module,
+        "_load_tokenizer_with_fallback",
+        lambda source: calls.append(("load", source)) or FakeTokenizer(),
+    )
+
+    tokenizer = module.EndpointHandler.get_tokenizer("phi3:mini")
+
+    assert isinstance(tokenizer, FakeTokenizer)
+    assert calls == [
+        ("load", "microsoft/Phi-3-mini-4k-instruct"),
+        ("save_pretrained", str(local_tokenizer_path)),
+    ]
+
+
 def test_responses_handler_emits_completed_event_after_stream_error(monkeypatch):
     module = _load_server_utils_module(monkeypatch)
 

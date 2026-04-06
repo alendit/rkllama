@@ -46,6 +46,12 @@ logging.basicConfig(
 logger = logging.getLogger("rkllama.server_utils")
 
 
+def _clean_modelfile_value(value):
+    if value is None:
+        return None
+    return str(value).replace('"', "").replace("'", "").strip() or None
+
+
 def _load_tokenizer_with_fallback(pretrained_path):
     try:
         return AutoTokenizer.from_pretrained(pretrained_path, trust_remote_code=True)
@@ -142,24 +148,31 @@ class EndpointHandler:
         local_tokenizer_path = os.path.join(
             rkllama.config.get_path("models"), model_name, "tokenizer"
         )
+        tokenizer_source = _clean_modelfile_value(
+            get_property_modelfile(
+                model_name, "TOKENIZER", rkllama.config.get_path("models")
+            )
+        )
+        if tokenizer_source is None:
+            tokenizer_source = _clean_modelfile_value(
+                get_property_modelfile(
+                    model_name,
+                    "HUGGINGFACE_PATH",
+                    rkllama.config.get_path("models"),
+                )
+            )
+        if tokenizer_source is None:
+            tokenizer_source = model_name
 
         if not os.path.isdir(local_tokenizer_path):
             logger.debug("Local Tokenizer doesn't exists!")
-
-            # Get model specific tokenizer from Huggin Face specified in Modelfile
-            model_in_hf = (
-                get_property_modelfile(
-                    model_name, "HUGGINGFACE_PATH", rkllama.config.get_path("models")
-                )
-                .replace('"', "")
-                .replace("'", "")
-            )
             logger.info(
-                f"Download the tokenizer only one time from Hugging face repo: {model_in_hf}"
+                "Download the tokenizer only one time from tokenizer source: %s",
+                tokenizer_source,
             )
 
             # Get the tokenizer configured for the model
-            tokenizer = _load_tokenizer_with_fallback(model_in_hf)
+            tokenizer = _load_tokenizer_with_fallback(tokenizer_source)
 
             # Save to the disk the local tokenizer for future use
             tokenizer.save_pretrained(local_tokenizer_path)
