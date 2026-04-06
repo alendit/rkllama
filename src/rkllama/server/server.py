@@ -1026,7 +1026,7 @@ def generate_ollama():
         model_name = data.get('model')
         prompt = data.get('prompt')
         system = data.get('system', '')
-        stream = data.get('stream', True)
+        stream = data.get('stream', False)
         enable_thinking = data.get('enable_thinking', (data.get('think', None))) # Ollama now uses 'think' in some versions
         images = data.get('images', None)  # For multimodal inputs
         
@@ -1106,11 +1106,12 @@ def chat_ollama():
         model_name = data.get('model')
         messages = data.get('messages', [])
         system = data.get('system', '')
-        stream = data.get('stream', True)
+        stream = data.get('stream', False)
         tools = data.get('tools', None)
         enable_thinking = data.get('enable_thinking', (data.get('think', None))) # Ollama now uses 'think' in some versions
         
         # Remove possible namespace in model name. Ollama API allows namespace/model
+        model_name = str(model_name or "")
         model_name = re.search(r'/(.*)', model_name).group(1) if re.search(r'/', model_name) else model_name
 
         # Extract format parameters - can be object or string
@@ -1264,6 +1265,101 @@ def chat_ollama():
             if DEBUG_MODE:
                 logger.debug("Releasing lock in chat_ollama")
             variables.verrou.release()
+
+
+@app.route('/v1/responses', methods=['POST'])
+def responses_ollama():
+
+    lock_acquired = False
+
+    try:
+        data = request.get_json(force=True)
+
+        if DEBUG_MODE:
+            logger.debug(f"API OpenAI responses request data: {data}")
+
+        model_name = data.get('model')
+        input_data = data.get('input', '')
+        instructions = data.get('instructions', '')
+        stream = data.get('stream', True)
+        tools = data.get('tools', None)
+        enable_thinking = data.get('enable_thinking', (data.get('think', None)))
+        format_spec = data.get('text', {}).get('format') if isinstance(data.get('text'), dict) else data.get('format')
+        options = data.get('options', {})
+        images = data.get('images', None)
+        previous_response_id = data.get('previous_response_id')
+
+        for payload_key, option_key in (
+            ("temperature", "temperature"),
+            ("top_p", "top_p"),
+            ("top_k", "top_k"),
+            ("presence_penalty", "presence_penalty"),
+            ("frequency_penalty", "frequency_penalty"),
+            ("seed", "seed"),
+            ("max_output_tokens", "max_new_tokens"),
+            ("max_completion_tokens", "max_new_tokens"),
+        ):
+            if payload_key in data:
+                options.setdefault(option_key, data[payload_key])
+
+        model_name = re.search(r'/(.*)', model_name).group(1) if re.search(r'/', model_name) else model_name
+
+        if not model_name:
+            return jsonify({"error": "Missing model name"}), 400
+
+        if not variables.worker_manager_rkllm.exists_model_loaded(model_name):
+            _, error = load_model(model_name, request_options=options)
+            if error:
+                return jsonify({"error": f"Failed to load model '{model_name}': {error}"}), 500
+
+        variables.verrou.acquire()
+        lock_acquired = True
+
+        from rkllama.api.server_utils import ResponsesEndpointHandler
+
+        return ResponsesEndpointHandler.handle_request(
+            model_name=model_name,
+            input_data=input_data,
+            instructions=instructions,
+            stream=stream,
+            format_spec=format_spec,
+            options=options,
+            tools=tools,
+            enable_thinking=enable_thinking,
+            is_openai_request=True,
+            images=images,
+            previous_response_id=previous_response_id,
+            request_data=data,
+        )
+
+    except Exception as e:
+        logger.exception("Error in responses_ollama")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if lock_acquired and variables.verrou.locked():
+            if DEBUG_MODE:
+                logger.debug("Releasing lock in responses_ollama")
+            variables.verrou.release()
+
+
+@app.route('/v1/responses/<response_id>', methods=['GET'])
+def get_response_openai(response_id):
+    from rkllama.api.server_utils import ResponsesEndpointHandler
+
+    response = ResponsesEndpointHandler.get_response(response_id)
+    if response is None:
+        return jsonify({"error": f"Response '{response_id}' not found"}), 404
+    return jsonify(response), 200
+
+
+@app.route('/v1/responses/<response_id>/cancel', methods=['POST'])
+def cancel_response_openai(response_id):
+    from rkllama.api.server_utils import ResponsesEndpointHandler
+
+    response = ResponsesEndpointHandler.cancel_response(response_id)
+    if response is None:
+        return jsonify({"error": f"Response '{response_id}' not found"}), 404
+    return jsonify(response), 200
 
 
 # Only include debug endpoint if in debug mode

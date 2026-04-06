@@ -48,6 +48,7 @@ A server to run and interact with LLM models optimized for Rockchip RK3588(S) an
    * `/api/version` 
    * `/api/pull` 
 - **Partial OpenAI API compatibility** - Support for:
+   * `/v1/responses`
    * `/v1/completions`
    * `/v1/chat/completions`
    * `/v1/embeddings`

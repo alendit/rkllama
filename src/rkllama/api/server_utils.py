@@ -6,6 +6,7 @@ import hashlib
 import base64
 import os
 import re  # Add import for regex used in JSON extraction
+import uuid
 import rkllama.api.variables as variables
 from transformers import AutoTokenizer
 from flask import jsonify, Response, stream_with_context
@@ -545,6 +546,353 @@ class ChatEndpointHandler(EndpointHandler):
 
         response = cls.format_complete_response(model_name, complete_text, metrics, format_data)
         return jsonify(response), 200
+
+
+class ResponsesEndpointHandler(EndpointHandler):
+    """Handler for OpenAI Responses API requests."""
+
+    _responses: dict[str, dict[str, Any]] = {}
+
+    @staticmethod
+    def _new_response_id() -> str:
+        return f"resp_{uuid.uuid4().hex}"
+
+    @staticmethod
+    def _new_item_id(prefix: str) -> str:
+        return f"{prefix}_{uuid.uuid4().hex}"
+
+    @staticmethod
+    def _sse_event(event_type: str, payload: dict[str, Any]) -> str:
+        event_payload = {"type": event_type, **payload}
+        return f"event: {event_type}\ndata: {json.dumps(event_payload)}\n\n"
+
+    @staticmethod
+    def _stringify_content(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    if isinstance(item.get("text"), str):
+                        parts.append(item["text"])
+                    elif isinstance(item.get("content"), str):
+                        parts.append(item["content"])
+                elif item is not None:
+                    parts.append(str(item))
+            return "\n".join(part for part in parts if part)
+        if content is None:
+            return ""
+        return str(content)
+
+    @classmethod
+    def _normalize_input_messages(
+        cls, input_data: Any, instructions: str | None = None
+    ) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
+        if isinstance(instructions, str) and instructions.strip():
+            messages.append({"role": "system", "content": instructions.strip()})
+
+        if isinstance(input_data, str):
+            if input_data.strip():
+                messages.append({"role": "user", "content": input_data})
+            return messages
+
+        if isinstance(input_data, list):
+            for item in input_data:
+                if isinstance(item, str):
+                    if item.strip():
+                        messages.append({"role": "user", "content": item})
+                    continue
+                if not isinstance(item, dict):
+                    continue
+
+                role = str(item.get("role", "user")).strip().lower()
+                item_type = str(item.get("type", "")).strip().lower()
+                content = item.get("content", item.get("text", item.get("input", "")))
+
+                if item_type in {"function_call_output", "tool_output", "tool_result"}:
+                    role = "tool"
+                    content = item.get("output", content)
+                elif item_type in {"function_call", "tool_call"} and role == "user":
+                    role = "assistant"
+
+                if role not in {"system", "user", "assistant", "developer"}:
+                    role = "tool" if item_type == "function_call_output" else "user"
+                if role == "developer":
+                    role = "system"
+
+                messages.append(
+                    {
+                        "role": "assistant" if role == "assistant" else role,
+                        "content": cls._stringify_content(content),
+                    }
+                )
+            return messages
+
+        if input_data is not None:
+            messages.append({"role": "user", "content": cls._stringify_content(input_data)})
+        return messages
+
+    @classmethod
+    def _tool_call_items(cls, tool_calls: Any) -> list[dict[str, Any]]:
+        if not isinstance(tool_calls, list):
+            return []
+        items: list[dict[str, Any]] = []
+        for tool in tool_calls:
+            if not isinstance(tool, dict):
+                continue
+            function = tool.get("function", {})
+            if not isinstance(function, dict):
+                function = {}
+            arguments = function.get("arguments", {})
+            if isinstance(arguments, (dict, list)):
+                arguments_value = json.dumps(arguments)
+            else:
+                arguments_value = str(arguments)
+            items.append(
+                {
+                    "id": tool.get("id") or cls._new_item_id("fc"),
+                    "call_id": tool.get("call_id") or tool.get("id") or cls._new_item_id("call"),
+                    "type": "function_call",
+                    "name": function.get("name", ""),
+                    "arguments": arguments_value,
+                    "status": "completed",
+                }
+            )
+        return items
+
+    @classmethod
+    def _response_object(
+        cls,
+        *,
+        response_id: str,
+        model_name: str,
+        chat_response: dict[str, Any],
+        request_data: dict[str, Any],
+        messages: list[dict[str, Any]],
+        status: str = "completed",
+        output_text: str | None = None,
+        tool_calls: Any = None,
+    ) -> dict[str, Any]:
+        message = chat_response.get("message", {}) if isinstance(chat_response.get("message"), dict) else {}
+        text = output_text if output_text is not None else cls._stringify_content(message.get("content", ""))
+        tool_call_items = cls._tool_call_items(tool_calls if tool_calls is not None else message.get("tool_calls"))
+        output: list[dict[str, Any]]
+        if tool_call_items:
+            output = tool_call_items
+        else:
+            output = [
+                {
+                    "id": cls._new_item_id("msg"),
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": text,
+                            "annotations": [],
+                        }
+                    ],
+                }
+            ]
+
+        input_tokens = int(chat_response.get("prompt_eval_count", 0) or 0)
+        output_tokens = int(chat_response.get("eval_count", 0) or 0)
+        usage = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }
+        if "prompt_eval_duration" in chat_response:
+            usage["input_tokens_details"] = {
+                "cached_tokens": 0,
+            }
+
+        return {
+            "id": response_id,
+            "object": "response",
+            "created_at": int(time.time()),
+            "status": status,
+            "model": model_name,
+            "output": output,
+            "output_text": "" if tool_call_items else text,
+            "usage": usage,
+            "parallel_tool_calls": bool(request_data.get("parallel_tool_calls", True)),
+            "reasoning": request_data.get("reasoning"),
+            "instructions": request_data.get("instructions"),
+            "input": messages,
+            "error": None,
+        }
+
+    @classmethod
+    def _store_response(cls, response: dict[str, Any], messages: list[dict[str, Any]], request_data: dict[str, Any]) -> None:
+        stored = dict(response)
+        stored["_messages"] = messages
+        stored["_request_data"] = request_data
+        cls._responses[str(response["id"])] = stored
+
+    @classmethod
+    def get_response(cls, response_id: str) -> dict[str, Any] | None:
+        response = cls._responses.get(response_id)
+        if response is None:
+            return None
+        return {key: value for key, value in response.items() if not key.startswith("_")}
+
+    @classmethod
+    def cancel_response(cls, response_id: str) -> dict[str, Any] | None:
+        response = cls._responses.get(response_id)
+        if response is None:
+            return None
+        response["status"] = "cancelled"
+        return {key: value for key, value in response.items() if not key.startswith("_")}
+
+    @classmethod
+    def handle_request(
+        cls,
+        model_name,
+        input_data,
+        instructions="",
+        stream=True,
+        format_spec=None,
+        options=None,
+        tools=None,
+        enable_thinking=False,
+        is_openai_request=False,
+        images=None,
+        previous_response_id=None,
+        request_data=None,
+    ):
+        """Process a Responses API request by translating it through the chat pipeline."""
+        request_data = request_data or {}
+        messages = cls._normalize_input_messages(input_data, instructions)
+        if previous_response_id and previous_response_id in cls._responses:
+            previous = cls._responses[previous_response_id]
+            prior_messages = previous.get("_messages")
+            if isinstance(prior_messages, list):
+                messages = [*prior_messages, *messages]
+
+        chat_result = ChatEndpointHandler.handle_request(
+            model_name=model_name,
+            messages=messages,
+            system="",
+            stream=stream,
+            format_spec=format_spec,
+            options=options,
+            tools=tools,
+            enable_thinking=enable_thinking,
+            is_openai_request=False,
+            images=images,
+        )
+        response_id = cls._new_response_id()
+
+        if stream:
+            chat_response = chat_result
+            created_at = int(time.time())
+
+            def generate():
+                complete_text = ""
+                tool_calls = None
+                final_chat_chunk: dict[str, Any] | None = None
+                yield cls._sse_event(
+                    "response.created",
+                    {
+                        "id": response_id,
+                        "object": "response",
+                        "created_at": created_at,
+                        "status": "in_progress",
+                        "model": model_name,
+                    },
+                )
+                for raw in chat_response.response:
+                    if isinstance(raw, bytes):
+                        raw = raw.decode("utf-8")
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        chunk = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(chunk, dict):
+                        continue
+
+                    message = chunk.get("message", {})
+                    if not isinstance(message, dict):
+                        message = {}
+                    token = message.get("content", "")
+                    if not chunk.get("done"):
+                        if isinstance(token, str) and token:
+                            complete_text += token
+                            yield cls._sse_event(
+                                "response.output_text.delta",
+                                {
+                                    "response_id": response_id,
+                                    "output_index": 0,
+                                    "content_index": 0,
+                                    "delta": token,
+                                },
+                            )
+                        if message.get("tool_calls"):
+                            tool_calls = message.get("tool_calls")
+                        continue
+
+                    final_chat_chunk = chunk
+                    if message.get("tool_calls"):
+                        tool_calls = message.get("tool_calls")
+                    break
+
+                chat_payload = final_chat_chunk or {}
+                response_status = "completed" if final_chat_chunk is not None else "incomplete"
+                response_object = cls._response_object(
+                    response_id=response_id,
+                    model_name=model_name,
+                    chat_response=chat_payload,
+                    request_data=request_data,
+                    messages=messages,
+                    status=response_status,
+                    output_text=complete_text,
+                    tool_calls=tool_calls,
+                )
+                cls._store_response(response_object, messages, request_data)
+
+                if tool_calls:
+                    for item in cls._tool_call_items(tool_calls):
+                        yield cls._sse_event(
+                            "response.output_item.added",
+                            {
+                                "response_id": response_id,
+                                "item": item,
+                            },
+                        )
+                else:
+                    yield cls._sse_event(
+                        "response.output_text.done",
+                        {
+                            "response_id": response_id,
+                            "text": complete_text,
+                        },
+                    )
+
+                yield cls._sse_event("response.completed", response_object)
+
+            return Response(stream_with_context(generate()), mimetype="text/event-stream")
+
+        chat_response, code = chat_result
+        if code != 200:
+            return chat_response, code
+        chat_payload = json.loads(chat_response.get_data().decode("utf-8"))
+        response_object = cls._response_object(
+            response_id=response_id,
+            model_name=model_name,
+            chat_response=chat_payload,
+            request_data=request_data,
+            messages=messages,
+            status="completed",
+        )
+        cls._store_response(response_object, messages, request_data)
+        return jsonify(response_object), 200
 
 
 class GenerateEndpointHandler(EndpointHandler):
