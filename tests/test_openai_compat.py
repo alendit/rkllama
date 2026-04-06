@@ -55,7 +55,13 @@ def _load_server_utils_module(monkeypatch):
     format_utils_module.responses_input_to_messages = lambda *args, **kwargs: []
 
     transformers_module = types.ModuleType("transformers")
-    transformers_module.AutoTokenizer = object
+
+    class DummyAutoTokenizer:
+        @staticmethod
+        def from_pretrained(*args, **kwargs):
+            raise NotImplementedError
+
+    transformers_module.AutoTokenizer = DummyAutoTokenizer
 
     monkeypatch.setitem(sys.modules, "rkllama", rkllama_pkg)
     monkeypatch.setitem(sys.modules, "rkllama.api", api_pkg)
@@ -86,6 +92,30 @@ def test_responses_handler_stringifies_mixed_content(monkeypatch):
     assert module.ResponsesEndpointHandler._stringify_content(
         [{"text": "hello"}, {"content": "world"}, 123]
     ) == "hello\nworld\n123"
+
+
+def test_server_utils_tokenizer_falls_back_to_slow(monkeypatch):
+    module = _load_server_utils_module(monkeypatch)
+    calls = []
+
+    class FakeTokenizer:
+        pass
+
+    def fake_from_pretrained(path, **kwargs):
+        calls.append((path, kwargs))
+        if len(calls) == 1:
+            raise AttributeError("'NoneType' object has no attribute 'endswith'")
+        return FakeTokenizer()
+
+    monkeypatch.setattr(module.AutoTokenizer, "from_pretrained", fake_from_pretrained)
+
+    tokenizer = module._load_tokenizer_with_fallback("phi3")
+
+    assert isinstance(tokenizer, FakeTokenizer)
+    assert calls == [
+        ("phi3", {"trust_remote_code": True}),
+        ("phi3", {"trust_remote_code": True, "use_fast": False}),
+    ]
 
 
 def test_normalize_openai_format_spec_json_object():

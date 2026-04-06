@@ -18,6 +18,22 @@ from transformers import AutoTokenizer
 from dotenv import load_dotenv
 
 
+def _load_tokenizer_with_fallback(pretrained_path: str) -> Optional[AutoTokenizer]:
+    try:
+        return AutoTokenizer.from_pretrained(pretrained_path, trust_remote_code=True)
+    except AttributeError as e:
+        if "endswith" not in str(e):
+            raise
+        logger.warning(
+            "Falling back to slow tokenizer for %s after fast tokenizer load failed: %s",
+            pretrained_path,
+            e,
+        )
+        return AutoTokenizer.from_pretrained(
+            pretrained_path, trust_remote_code=True, use_fast=False
+        )
+
+
 def load_tokenizer(modelfile: str, model_id: str) -> Optional[AutoTokenizer]:
 
     # Load environment variables from Modelfile
@@ -32,9 +48,7 @@ def load_tokenizer(modelfile: str, model_id: str) -> Optional[AutoTokenizer]:
         if os.path.exists(custom_tokenizer):
             try:
                 # Attempt to load the custom tokenizer
-                tokenizer = AutoTokenizer.from_pretrained(
-                    custom_tokenizer, trust_remote_code=True
-                )
+                tokenizer = _load_tokenizer_with_fallback(custom_tokenizer)
                 print(f"Loaded custom tokenizer from {custom_tokenizer}")
             except Exception as e:
                 # Warn user and prepare to fallback
@@ -50,7 +64,7 @@ def load_tokenizer(modelfile: str, model_id: str) -> Optional[AutoTokenizer]:
     # Fallback to default AutoTokenizer if necessary
     if tokenizer is None:
         try:
-            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+            tokenizer = _load_tokenizer_with_fallback(model_id)
             print(f"Loaded default tokenizer for model {model_id}")
         except Exception as e:
             print(

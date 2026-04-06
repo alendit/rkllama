@@ -46,6 +46,24 @@ logging.basicConfig(
 logger = logging.getLogger("rkllama.server_utils")
 
 
+def _load_tokenizer_with_fallback(pretrained_path):
+    try:
+        return AutoTokenizer.from_pretrained(pretrained_path, trust_remote_code=True)
+    except AttributeError as err:
+        if "endswith" not in str(err):
+            raise
+        logger.warning(
+            "Falling back to slow tokenizer for %s after fast tokenizer load failed: %s",
+            pretrained_path,
+            err,
+        )
+        return AutoTokenizer.from_pretrained(
+            pretrained_path,
+            trust_remote_code=True,
+            use_fast=False,
+        )
+
+
 class RequestWrapper:
     """A class that mimics Flask's request object for custom request handling"""
 
@@ -141,9 +159,7 @@ class EndpointHandler:
             )
 
             # Get the tokenizer configured for the model
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_in_hf, trust_remote_code=True
-            )
+            tokenizer = _load_tokenizer_with_fallback(model_in_hf)
 
             # Save to the disk the local tokenizer for future use
             tokenizer.save_pretrained(local_tokenizer_path)
@@ -151,9 +167,7 @@ class EndpointHandler:
         else:
             logger.debug("Local Tokenizer found! Using it...")
             # Get the local tokenizer for the model
-            tokenizer = AutoTokenizer.from_pretrained(
-                local_tokenizer_path, trust_remote_code=True
-            )
+            tokenizer = _load_tokenizer_with_fallback(local_tokenizer_path)
 
         # Return the tokenizer
         return tokenizer
