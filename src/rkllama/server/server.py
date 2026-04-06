@@ -70,6 +70,34 @@ def print_color(message, color):
 variables.worker_manager_rkllm = WorkerManager()
 
 
+def _load_worker_with_retry(
+    model_name,
+    rkllm_model_path,
+    model_dir,
+    request_options,
+):
+    max_attempts = max(1, int(os.getenv("RKLLAMA_MODEL_LOAD_ATTEMPTS", "2")))
+    retry_delay_seconds = float(os.getenv("RKLLAMA_MODEL_LOAD_RETRY_DELAY_SEC", "2"))
+
+    for attempt in range(1, max_attempts + 1):
+        model_loaded = variables.worker_manager_rkllm.add_worker(
+            model_name, rkllm_model_path, model_dir, options=request_options
+        )
+        if model_loaded:
+            return True
+        if attempt < max_attempts:
+            logger.warning(
+                "Loading model %s failed on attempt %s/%s; retrying in %.1fs",
+                model_name,
+                attempt,
+                max_attempts,
+                retry_delay_seconds,
+            )
+            time.sleep(retry_delay_seconds)
+
+    return False
+
+
 def create_modelfile(huggingface_path, From, system="", model_name=None):
     struct_modelfile = f"""
 FROM="{From}"
@@ -170,8 +198,11 @@ def load_model(
         )
 
     # Model loaded into memory
-    model_loaded = variables.worker_manager_rkllm.add_worker(
-        model_name, rkllm_model_path, model_dir, options=request_options
+    model_loaded = _load_worker_with_retry(
+        model_name,
+        rkllm_model_path,
+        model_dir,
+        request_options,
     )
 
     if not model_loaded:

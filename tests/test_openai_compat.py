@@ -26,6 +26,9 @@ responses_input_to_messages = format_utils.responses_input_to_messages
 SERVER_UTILS_PATH = (
     Path(__file__).resolve().parents[1] / "src" / "rkllama" / "api" / "server_utils.py"
 )
+SERVER_PATH = (
+    Path(__file__).resolve().parents[1] / "src" / "rkllama" / "server" / "server.py"
+)
 
 
 def _load_server_utils_module(monkeypatch):
@@ -74,6 +77,107 @@ def _load_server_utils_module(monkeypatch):
     spec = importlib.util.spec_from_file_location(
         "rkllama.api.server_utils", SERVER_UTILS_PATH
     )
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_server_module(monkeypatch):
+    rkllama_pkg = types.ModuleType("rkllama")
+    rkllama_pkg.__path__ = []  # type: ignore[attr-defined]
+
+    api_pkg = types.ModuleType("rkllama.api")
+    api_pkg.__path__ = []  # type: ignore[attr-defined]
+    server_pkg = types.ModuleType("rkllama.server")
+    server_pkg.__path__ = []  # type: ignore[attr-defined]
+
+    config_module = types.ModuleType("rkllama.config")
+    config_module.is_debug_mode = lambda: False
+    config_module.get_path = lambda name: "/tmp"
+    rkllama_pkg.config = config_module
+
+    dotenv_module = types.ModuleType("dotenv")
+    dotenv_module.load_dotenv = lambda *args, **kwargs: None
+
+    huggingface_module = types.ModuleType("huggingface_hub")
+    huggingface_module.hf_hub_url = lambda *args, **kwargs: ""
+    huggingface_module.HfFileSystem = object
+
+    flask_module = types.ModuleType("flask")
+
+    class DummyFlask:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def route(self, *args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+    flask_module.Flask = DummyFlask
+    flask_module.request = types.SimpleNamespace(path="/", get_json=lambda force=False: {})
+    flask_module.jsonify = lambda payload=None, **kwargs: payload if payload is not None else kwargs
+    flask_module.Response = object
+    flask_module.stream_with_context = lambda value: value
+    flask_module.send_file = lambda *args, **kwargs: None
+
+    flask_cors_module = types.ModuleType("flask_cors")
+    flask_cors_module.CORS = lambda *args, **kwargs: None
+
+    classes_module = types.ModuleType("rkllama.api.classes")
+    rknn_module = types.ModuleType("rkllama.api.rkllm")
+    process_module = types.ModuleType("rkllama.api.process")
+    process_module.Request = lambda *args, **kwargs: None
+    variables_module = types.ModuleType("rkllama.api.variables")
+    variables_module.worker_manager_rkllm = None
+    debug_utils_module = types.ModuleType("rkllama.api.debug_utils")
+    debug_utils_module.check_response_format = lambda *args, **kwargs: []
+
+    format_utils_module = types.ModuleType("rkllama.api.format_utils")
+    format_utils_module.strtobool = lambda value: bool(value)
+    format_utils_module.openai_to_ollama_chat_request = lambda data: data
+    format_utils_module.openai_to_ollama_generate_request = lambda data: data
+    format_utils_module.normalize_openai_format_spec = lambda value: value
+
+    model_utils_module = types.ModuleType("rkllama.api.model_utils")
+    model_utils_module.extract_model_details = lambda *args, **kwargs: {}
+    model_utils_module.get_huggingface_model_info = lambda *args, **kwargs: {}
+    model_utils_module.get_property_modelfile = lambda *args, **kwargs: None
+    model_utils_module.get_model_full_options = lambda *args, **kwargs: {}
+    model_utils_module.find_rkllm_model_name = lambda *args, **kwargs: None
+    model_utils_module.is_rkllm_model = lambda *args, **kwargs: True
+
+    worker_module = types.ModuleType("rkllama.api.worker")
+
+    class DummyWorkerManager:
+        def add_worker(self, *args, **kwargs):
+            return True
+
+        def exists_model_loaded(self, *args, **kwargs):
+            return False
+
+    worker_module.WorkerManager = DummyWorkerManager
+
+    monkeypatch.setitem(sys.modules, "rkllama", rkllama_pkg)
+    monkeypatch.setitem(sys.modules, "rkllama.api", api_pkg)
+    monkeypatch.setitem(sys.modules, "rkllama.server", server_pkg)
+    monkeypatch.setitem(sys.modules, "rkllama.config", config_module)
+    monkeypatch.setitem(sys.modules, "dotenv", dotenv_module)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", huggingface_module)
+    monkeypatch.setitem(sys.modules, "flask", flask_module)
+    monkeypatch.setitem(sys.modules, "flask_cors", flask_cors_module)
+    monkeypatch.setitem(sys.modules, "rkllama.api.classes", classes_module)
+    monkeypatch.setitem(sys.modules, "rkllama.api.rkllm", rknn_module)
+    monkeypatch.setitem(sys.modules, "rkllama.api.process", process_module)
+    monkeypatch.setitem(sys.modules, "rkllama.api.variables", variables_module)
+    monkeypatch.setitem(sys.modules, "rkllama.api.debug_utils", debug_utils_module)
+    monkeypatch.setitem(sys.modules, "rkllama.api.format_utils", format_utils_module)
+    monkeypatch.setitem(sys.modules, "rkllama.api.model_utils", model_utils_module)
+    monkeypatch.setitem(sys.modules, "rkllama.api.worker", worker_module)
+
+    spec = importlib.util.spec_from_file_location("rkllama.server.server", SERVER_PATH)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
@@ -165,6 +269,31 @@ def test_clean_modelfile_value_unescapes_wrapped_quotes(monkeypatch):
         module._clean_modelfile_value('\\"microsoft/Phi-3-mini-4k-instruct\\"')
         == "microsoft/Phi-3-mini-4k-instruct"
     )
+
+
+def test_load_worker_with_retry_retries_once(monkeypatch):
+    module = _load_server_module(monkeypatch)
+    calls = []
+
+    class FakeWorkerManager:
+        def add_worker(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return len(calls) > 1
+
+    monkeypatch.setattr(module.variables, "worker_manager_rkllm", FakeWorkerManager())
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+    monkeypatch.setenv("RKLLAMA_MODEL_LOAD_ATTEMPTS", "2")
+    monkeypatch.setenv("RKLLAMA_MODEL_LOAD_RETRY_DELAY_SEC", "0")
+
+    loaded = module._load_worker_with_retry(
+        "phi3:mini",
+        "/tmp/model.rkllm",
+        "/tmp/model-dir",
+        {"num_ctx": 4096},
+    )
+
+    assert loaded is True
+    assert len(calls) == 2
 
 
 def test_responses_handler_emits_completed_event_after_stream_error(monkeypatch):
