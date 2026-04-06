@@ -820,6 +820,7 @@ class ResponsesEndpointHandler(EndpointHandler):
         status: str = "completed",
         output_text: str | None = None,
         tool_calls: Any = None,
+        error_message: str | None = None,
     ) -> dict[str, Any]:
         message = (
             chat_response.get("message", {})
@@ -879,7 +880,14 @@ class ResponsesEndpointHandler(EndpointHandler):
             "reasoning": request_data.get("reasoning"),
             "instructions": request_data.get("instructions"),
             "input": messages,
-            "error": None,
+            "error": (
+                None
+                if not error_message
+                else {
+                    "type": "server_error",
+                    "message": error_message,
+                }
+            ),
         }
 
     @classmethod
@@ -960,6 +968,7 @@ class ResponsesEndpointHandler(EndpointHandler):
                 complete_text = ""
                 tool_calls = None
                 final_chat_chunk: dict[str, Any] | None = None
+                stream_error: str | None = None
                 yield cls._sse_event(
                     "response.created",
                     {
@@ -970,47 +979,53 @@ class ResponsesEndpointHandler(EndpointHandler):
                         "model": model_name,
                     },
                 )
-                for raw in chat_response.response:
-                    if isinstance(raw, bytes):
-                        raw = raw.decode("utf-8")
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    try:
-                        chunk = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(chunk, dict):
-                        continue
+                try:
+                    for raw in chat_response.response:
+                        if isinstance(raw, bytes):
+                            raw = raw.decode("utf-8")
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            chunk = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(chunk, dict):
+                            continue
 
-                    message = chunk.get("message", {})
-                    if not isinstance(message, dict):
-                        message = {}
-                    token = message.get("content", "")
-                    if not chunk.get("done"):
-                        if isinstance(token, str) and token:
-                            complete_text += token
-                            yield cls._sse_event(
-                                "response.output_text.delta",
-                                {
-                                    "response_id": response_id,
-                                    "output_index": 0,
-                                    "content_index": 0,
-                                    "delta": token,
-                                },
-                            )
+                        message = chunk.get("message", {})
+                        if not isinstance(message, dict):
+                            message = {}
+                        token = message.get("content", "")
+                        if not chunk.get("done"):
+                            if isinstance(token, str) and token:
+                                complete_text += token
+                                yield cls._sse_event(
+                                    "response.output_text.delta",
+                                    {
+                                        "response_id": response_id,
+                                        "output_index": 0,
+                                        "content_index": 0,
+                                        "delta": token,
+                                    },
+                                )
+                            if message.get("tool_calls"):
+                                tool_calls = message.get("tool_calls")
+                            continue
+
+                        final_chat_chunk = chunk
                         if message.get("tool_calls"):
                             tool_calls = message.get("tool_calls")
-                        continue
-
-                    final_chat_chunk = chunk
-                    if message.get("tool_calls"):
-                        tool_calls = message.get("tool_calls")
-                    break
+                        break
+                except Exception as err:
+                    logger.exception("Responses stream failed before completion")
+                    stream_error = str(err)
 
                 chat_payload = final_chat_chunk or {}
                 response_status = (
-                    "completed" if final_chat_chunk is not None else "incomplete"
+                    "completed"
+                    if final_chat_chunk is not None and stream_error is None
+                    else "incomplete"
                 )
                 response_object = cls._response_object(
                     response_id=response_id,
@@ -1021,6 +1036,7 @@ class ResponsesEndpointHandler(EndpointHandler):
                     status=response_status,
                     output_text=complete_text,
                     tool_calls=tool_calls,
+                    error_message=stream_error,
                 )
                 cls._store_response(response_object, messages, request_data)
 

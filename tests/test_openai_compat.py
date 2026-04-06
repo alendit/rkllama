@@ -118,6 +118,50 @@ def test_server_utils_tokenizer_falls_back_to_slow(monkeypatch):
     ]
 
 
+def test_responses_handler_emits_completed_event_after_stream_error(monkeypatch):
+    module = _load_server_utils_module(monkeypatch)
+
+    class FakeChatResponse:
+        def __init__(self):
+            self.response = self._iter_chunks()
+
+        @staticmethod
+        def _iter_chunks():
+            yield json.dumps(
+                {
+                    "message": {"role": "assistant", "content": "Hi"},
+                    "done": False,
+                }
+            ).encode("utf-8")
+            raise RuntimeError("upstream stream crashed")
+
+    monkeypatch.setattr(
+        module.ChatEndpointHandler,
+        "handle_request",
+        classmethod(lambda cls, **kwargs: FakeChatResponse()),
+    )
+    monkeypatch.setattr(module, "stream_with_context", lambda value: value)
+
+    response = module.ResponsesEndpointHandler.handle_request(
+        model_name="qwen3:0.6b",
+        input_data="hi",
+        stream=True,
+        request_data={},
+    )
+
+    chunks = list(response.response)
+    payloads = [json.loads(chunk.split("data: ", 1)[1]) for chunk in chunks]
+
+    assert payloads[0]["type"] == "response.created"
+    assert payloads[1]["type"] == "response.output_text.delta"
+    assert payloads[-1]["type"] == "response.completed"
+    assert payloads[-1]["status"] == "incomplete"
+    assert payloads[-1]["error"] == {
+        "type": "server_error",
+        "message": "upstream stream crashed",
+    }
+
+
 def test_normalize_openai_format_spec_json_object():
     assert normalize_openai_format_spec({"type": "json_object"}) == "json"
 
