@@ -49,7 +49,15 @@ logger = logging.getLogger("rkllama.server_utils")
 def _clean_modelfile_value(value):
     if value is None:
         return None
-    return str(value).replace('"', "").replace("'", "").strip() or None
+    return (
+        str(value)
+        .replace('\\"', "")
+        .replace("\\'", "")
+        .replace('"', "")
+        .replace("'", "")
+        .strip()
+        or None
+    )
 
 
 def _load_tokenizer_with_fallback(pretrained_path):

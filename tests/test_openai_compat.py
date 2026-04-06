@@ -158,6 +158,15 @@ def test_server_utils_prefers_tokenizer_modelfile_value(monkeypatch, tmp_path):
     ]
 
 
+def test_clean_modelfile_value_unescapes_wrapped_quotes(monkeypatch):
+    module = _load_server_utils_module(monkeypatch)
+
+    assert (
+        module._clean_modelfile_value('\\"microsoft/Phi-3-mini-4k-instruct\\"')
+        == "microsoft/Phi-3-mini-4k-instruct"
+    )
+
+
 def test_responses_handler_emits_completed_event_after_stream_error(monkeypatch):
     module = _load_server_utils_module(monkeypatch)
 
