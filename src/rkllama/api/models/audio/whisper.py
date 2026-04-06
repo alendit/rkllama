@@ -15,6 +15,7 @@ from rknnlite.api import RKNNLite
 
 logger = logging.getLogger("rkllama.audio.whisper")
 
+
 class WhisperSTTModelRKNN:
     def __init__(
         self,
@@ -22,24 +23,25 @@ class WhisperSTTModelRKNN:
         model_path: str,
     ):
 
-        # Get encoder, decoder, adecoder with past and tokenizer 
-        encoder, decoder, decoder_with_past, tokenizer, configuration = self.find_model_files(model_path)
+        # Get encoder, decoder, adecoder with past and tokenizer
+        encoder, decoder, decoder_with_past, tokenizer, configuration = (
+            self.find_model_files(model_path)
+        )
 
         # Prepare the RKNN runtime model
         self.encoder_rknn = model_runtime[encoder]
         self.decoder_rknn = model_runtime[decoder]
         self.decoder_with_past_rknn = model_runtime[decoder_with_past]
-        
+
         # Save the tokenizer of the  model
         self.tokenizer = WhisperTokenizerFast.from_pretrained(tokenizer)
 
         # Save the tokenizer of the  model
         self.configuration = configparser.ConfigParser()
         self.configuration.read(configuration)
-    
+
         # Load Inputs and Outputs of the models
         self.load_inputs_outputs_from_rknn_models()
-
 
     def find_model_files(self, dir_path: str) -> Tuple[str, str]:
         """
@@ -56,7 +58,6 @@ class WhisperSTTModelRKNN:
         if not os.path.isdir(dir_path):
             raise NotADirectoryError(f"Not a directory: {dir_path}")
 
-        
         # Search for the encoder model
         encoder_rknn = self.get_rknn_model_path(os.path.join(dir_path, "encoder"))
 
@@ -64,7 +65,9 @@ class WhisperSTTModelRKNN:
         decoder_rknn = self.get_rknn_model_path(os.path.join(dir_path, "decoder"))
 
         # Search for the decoder with past model
-        decoder_with_past_rknn = self.get_rknn_model_path(os.path.join(dir_path, "decoder_with_past"))
+        decoder_with_past_rknn = self.get_rknn_model_path(
+            os.path.join(dir_path, "decoder_with_past")
+        )
 
         # Search for the tokenizer of the model
         tokenizer = os.path.join(dir_path, "tokenizer")
@@ -72,9 +75,14 @@ class WhisperSTTModelRKNN:
         # Search for the configuration of the model
         configuration = os.path.join(dir_path, "whisper.ini")
 
-        # Return the files    
-        return ( encoder_rknn, decoder_rknn, decoder_with_past_rknn, tokenizer, configuration)
-
+        # Return the files
+        return (
+            encoder_rknn,
+            decoder_rknn,
+            decoder_with_past_rknn,
+            tokenizer,
+            configuration,
+        )
 
     def get_rknn_model_path(self, dir_path) -> str:
         """
@@ -100,9 +108,8 @@ class WhisperSTTModelRKNN:
                     model_rknn = path
                     break
 
-        # Return the model    
+        # Return the model
         return model_rknn
-
 
     def load_inputs_outputs_from_rknn_models(self):
         """
@@ -120,33 +127,51 @@ class WhisperSTTModelRKNN:
 
         # Get inputs and outputs from decoder with past
         decoder_with_past_runtime = self.decoder_with_past_rknn.rknn_runtime
-        n_input_decoder_with_past, n_output_decoder_with_past = decoder_with_past_runtime.get_in_out_num()
+        n_input_decoder_with_past, n_output_decoder_with_past = (
+            decoder_with_past_runtime.get_in_out_num()
+        )
 
         # Get the inputs and outputs name in the order expected by the model
-        self.decoder_rknn_order_inputs_names = [ decoder_runtime.get_tensor_attr(i, is_output=False).name.decode("utf-8") for i in range(n_input_decoder) ]
-        self.decoder_rknn_order_output_names = [ decoder_runtime.get_tensor_attr(i, is_output=True).name.decode("utf-8") for i in range(n_output_decoder) ]
+        self.decoder_rknn_order_inputs_names = [
+            decoder_runtime.get_tensor_attr(i, is_output=False).name.decode("utf-8")
+            for i in range(n_input_decoder)
+        ]
+        self.decoder_rknn_order_output_names = [
+            decoder_runtime.get_tensor_attr(i, is_output=True).name.decode("utf-8")
+            for i in range(n_output_decoder)
+        ]
 
         # Get the inputs and outputs name in the order expected by the model with past
-        self.decoder_with_past_rknn_order_inputs_names = [ decoder_with_past_runtime.get_tensor_attr(i, is_output=False).name.decode("utf-8") for i in range(n_input_decoder_with_past) ]
-        self.decoder_with_past_rknn_order_output_names = [ decoder_with_past_runtime.get_tensor_attr(i, is_output=True).name.decode("utf-8") for i in range(n_output_decoder_with_past) ]
+        self.decoder_with_past_rknn_order_inputs_names = [
+            decoder_with_past_runtime.get_tensor_attr(i, is_output=False).name.decode(
+                "utf-8"
+            )
+            for i in range(n_input_decoder_with_past)
+        ]
+        self.decoder_with_past_rknn_order_output_names = [
+            decoder_with_past_runtime.get_tensor_attr(i, is_output=True).name.decode(
+                "utf-8"
+            )
+            for i in range(n_output_decoder_with_past)
+        ]
 
         # Get the expeted MEL by the model
         self.n_mel = encoder_runtime.get_tensor_attr(0, is_output=False).dims[1]
 
         # Get the max tokens allowed by the decoder with past
-        self.max_tokens = decoder_with_past_runtime.get_tensor_attr(1, is_output=False).dims[2]
-
-
+        self.max_tokens = decoder_with_past_runtime.get_tensor_attr(
+            1, is_output=False
+        ).dims[2]
 
     def vad_chunks_for_whisper(self, wav_bytes):
-        
+
         # Get configuration variables
-        sample_rate=int(self.configuration["DEFAULT"]["SAMPLE_RATE"])
-        frame_ms=int(self.configuration["VAD"]["FRAME_MS"])
-        vad_mode=int(self.configuration["VAD"]["VAD_MODE"])
-        max_silence_ms=int(self.configuration["VAD"]["MAX_SILENCE_MS"])
-        min_chunk_ms=int(self.configuration["VAD"]["MIN_CHUNK_MS"])
-        pad_ms=int(self.configuration["VAD"]["PAD_MS"])
+        sample_rate = int(self.configuration["DEFAULT"]["SAMPLE_RATE"])
+        frame_ms = int(self.configuration["VAD"]["FRAME_MS"])
+        vad_mode = int(self.configuration["VAD"]["VAD_MODE"])
+        max_silence_ms = int(self.configuration["VAD"]["MAX_SILENCE_MS"])
+        min_chunk_ms = int(self.configuration["VAD"]["MIN_CHUNK_MS"])
+        pad_ms = int(self.configuration["VAD"]["PAD_MS"])
 
         # Define the VAD
         vad = webrtcvad.Vad(vad_mode)
@@ -175,7 +200,7 @@ class WhisperSTTModelRKNN:
         silence = 0
 
         for i in range(0, len(audio_i16) - frame_size, frame_size):
-            frame_i16 = audio_i16[i:i + frame_size]
+            frame_i16 = audio_i16[i : i + frame_size]
             speech = vad.is_speech(frame_i16.tobytes(), sr)
 
             if speech:
@@ -202,7 +227,6 @@ class WhisperSTTModelRKNN:
             chunks.append(chunk)
 
         return chunks
-
 
     def merge_whisper_token_chunks(self, token_chunks, max_overlap_tokens=80):
         """
@@ -233,7 +257,6 @@ class WhisperSTTModelRKNN:
 
         return merged
 
-
     def nchw_to_nhwc(self, x: np.ndarray) -> np.ndarray:
         """
         COnvert NCHW → NHWC only if tensor is 4D.
@@ -246,21 +269,18 @@ class WhisperSTTModelRKNN:
         # (N, C, H, W) → (N, H, W, C)
         return np.transpose(x, (0, 2, 3, 1))
 
-    
-    
     def decode_tokens(self, tokens):
         """
         Decode the tokens for transcription
-        
+
         tokens [int]: Array of tokens
         """
 
         # Decode the tokens
         text = self.tokenizer.decode(tokens, skip_special_tokens=True)
-        
+
         # Return the transcription
         return text
-        
 
     def remove_pad_from_tensor_dim3(self, tensor, num3):
         """
@@ -271,9 +291,8 @@ class WhisperSTTModelRKNN:
 
         if num3 > orig_shape[2]:
             raise ValueError("num3 must be <= original third dimension")
-        fixed = tensor[:,:, :num3, :]
+        fixed = tensor[:, :, :num3, :]
         return fixed
-
 
     def remove_pad_from_tensor_dim2(self, tensor, num2):
         """
@@ -290,36 +309,38 @@ class WhisperSTTModelRKNN:
 
         return fixed
 
-
     def init_past(self, instructions, decoder_rknn, hidden_states):
-        
+
         # Set the first input of the model with the instructions
         input_ids = np.array([instructions], dtype=np.int64)
 
         # Padded the input accorind the dim expected by the decoder without past
         padded_z = np.zeros((input_ids.shape[0], 5), dtype=np.float32)
-        padded_z[:, :input_ids.shape[1]] = input_ids
-        
+        padded_z[:, : input_ids.shape[1]] = input_ids
+
         # Call first decoder without past to geenrate logits and first past to the other decoder
         decoder_start = time.time()
-        decoder_output = decoder_rknn.inference(inputs=[padded_z, hidden_states], data_format="nchw")
+        decoder_output = decoder_rknn.inference(
+            inputs=[padded_z, hidden_states], data_format="nchw"
+        )
         logger.debug(f"Decoder time: {(time.time() - decoder_start):.2f}s")
-        
+
         # Fix dimension of logits with the original dim of the input without padding
-        logits = self.remove_pad_from_tensor_dim2(decoder_output[0],input_ids.shape[1])
+        logits = self.remove_pad_from_tensor_dim2(decoder_output[0], input_ids.shape[1])
 
         # Construct initial past with the output of the decoder without past
         past = {}
-        for i,output in enumerate(self.decoder_rknn_order_output_names):
+        for i, output in enumerate(self.decoder_rknn_order_output_names):
             if output.startswith("present."):
-                new_past_key_name = output.replace('present', 'past_key_values')
+                new_past_key_name = output.replace("present", "past_key_values")
                 if "decoder" in output:
-                    past[new_past_key_name] = self.remove_pad_from_tensor_dim3(decoder_output[i],input_ids.shape[1])
+                    past[new_past_key_name] = self.remove_pad_from_tensor_dim3(
+                        decoder_output[i], input_ids.shape[1]
+                    )
                 else:
                     past[new_past_key_name] = decoder_output[i]
         # Return the first logits and past
         return logits, past
-        
 
     def transcribe(self, instructions, wav_file):
 
@@ -328,39 +349,42 @@ class WhisperSTTModelRKNN:
         logger.debug(f"Number of generated chunks by VAD: {len(audios)}")
 
         # Loop over every chunk audio to transcribe
-        all_tokens = []    
-        for audio in audios:    
-            
+        all_tokens = []
+        for audio in audios:
+
             # Audio → Mel
             audio = whisper.pad_or_trim(audio)
-            mel = whisper.log_mel_spectrogram(audio, n_mels = self.n_mel)
+            mel = whisper.log_mel_spectrogram(audio, n_mels=self.n_mel)
             arr_expanded = np.expand_dims(mel.numpy(), axis=0)
-            
+
             # Encoder
             # Inference RKNN encoder
             encoder_start = time.time()
-            hidden_states = self.encoder_rknn.inference(inputs=[arr_expanded], data_format="nchw")[0]
+            hidden_states = self.encoder_rknn.inference(
+                inputs=[arr_expanded], data_format="nchw"
+            )[0]
             logger.debug(f"Encoder time: {(time.time() - encoder_start):.2f}s")
 
             # Decoder without past
             # Initialize the first past with the first decoder without past
-            logits, past = self.init_past(instructions, self.decoder_rknn, hidden_states)
+            logits, past = self.init_past(
+                instructions, self.decoder_rknn, hidden_states
+            )
 
             # Decoder with past
             tokens = []
             for step in range(self.max_tokens):
                 logger.debug(f"Current loop by decoder with past ={step}")
-                
+
                 # Get the token from the logits
                 next_token = int(np.argmax(logits[0, -1]))
                 logger.debug(f"Generated token = {next_token}")
-                
 
                 # Check if EOS token reacheded
                 if next_token == int(self.configuration["DEFAULT"]["EOS_TOKEN_ID"]):
                     break
 
-                # Add the token to the list of tokens of the audio chunk    
+                # Add the token to the list of tokens of the audio chunk
                 tokens.append(next_token)
 
                 # Prepare the input with the last generated token fot the next call of the decoding process
@@ -370,38 +394,45 @@ class WhisperSTTModelRKNN:
 
                 # Call the decoder with past
                 decoder_with_past_start = time.time()
-                decoder_output = self.decoder_with_past_rknn.inference(inputs=[self.nchw_to_nhwc(inputs[key]) for key in inputs.keys() ], data_format="nhwc")
-                logger.debug(f"Decoder With Past time: {(time.time() - decoder_with_past_start):.2f}s")
-                
+                decoder_output = self.decoder_with_past_rknn.inference(
+                    inputs=[self.nchw_to_nhwc(inputs[key]) for key in inputs.keys()],
+                    data_format="nhwc",
+                )
+                logger.debug(
+                    f"Decoder With Past time: {(time.time() - decoder_with_past_start):.2f}s"
+                )
 
                 # Get the logits for the current inference
                 logits = decoder_output[0]
-                
+
                 # Update only decoder past
                 new_past_rknn = {}
-                for i,output in enumerate(self.decoder_with_past_rknn_order_output_names):
+                for i, output in enumerate(
+                    self.decoder_with_past_rknn_order_output_names
+                ):
                     if output.startswith("present.") and "decoder" in output:
-                        new_past_rknn[output.replace('present', 'past_key_values')] = decoder_output[i]
+                        new_past_rknn[output.replace("present", "past_key_values")] = (
+                            decoder_output[i]
+                        )
 
                 # encoder past se mantiene
                 for k in past:
                     if "encoder" in k:
-                        #new_past[k] = past[k]
+                        # new_past[k] = past[k]
                         new_past_rknn[k] = past[k]
-                
+
                 # Sort inputs for RKNN (Required)
-                ordered_past_rknn ={}
+                ordered_past_rknn = {}
                 for input in self.decoder_with_past_rknn_order_inputs_names:
                     if input in new_past_rknn.keys():
-                        ordered_past_rknn[input] =new_past_rknn[input]
-                
+                        ordered_past_rknn[input] = new_past_rknn[input]
 
-                #past = ordered_past
+                # past = ordered_past
                 past = ordered_past_rknn
 
             # Add all the tokens of the current chunk to the final list of tokens
             all_tokens.append(tokens)
-        
+
         # Merge all the tokens from chunks in the same token list
         merged_tokens = self.merge_whisper_token_chunks(all_tokens)
 
@@ -410,40 +441,37 @@ class WhisperSTTModelRKNN:
 
         # Return the transcription
         return transcription_text
-    
+
     def release_rknn_models(self):
         # Release resources from RKNN
         self.encoder_rknn.release()
         self.decoder_rknn.release()
         self.decoder_with_past_rknn.release()
 
-
-    def get_transcription(self,file,language, is_translation=False) -> str:
+    def get_transcription(self, file, language, is_translation=False) -> str:
         """
         Generate a transcription
-        
+
         file (file): Audio file to trancribe
         language: Language of the text
 
         Returns:
             str: Transcription text
         """
-        
-        
-        
+
         # Create the initial instruction
         start_token_id = int(self.configuration["DEFAULT"]["START_TOKEN_ID"])
-        
+
         # CHeck the type of task
         logger.debug(f"Is it a translation?: {is_translation}")
         if is_translation:
             # Get the transcribe token
             task_token_id = self.configuration["DEFAULT"]["TRANSLATE_TOKEN_ID"]
-        
-        else:    
+
+        else:
             # Get the transcribe token
             task_token_id = self.configuration["DEFAULT"]["TRANSCRIBE_TOKEN_ID"]
-        
+
         # CHeck if laguage not provided
         if not language:
             # Get the default language if provided
@@ -459,28 +487,28 @@ class WhisperSTTModelRKNN:
             # Check if languge supplied in request
             if language:
                 # Get the token id for the specified lamguage
-                language_token_id = self.tokenizer.encode(f"<|{language.lower()}|>", add_special_tokens = False)[0]
+                language_token_id = self.tokenizer.encode(
+                    f"<|{language.lower()}|>", add_special_tokens=False
+                )[0]
 
                 # Construct the instruction
-                instructions = [start_token_id,language_token_id,task_token_id]
-            
+                instructions = [start_token_id, language_token_id, task_token_id]
+
             else:
-                instructions = [start_token_id,task_token_id]
+                instructions = [start_token_id, task_token_id]
 
         logger.debug(f"Instructions to execute: {instructions}")
-        
-        
+
         # Send the transcription job
         transcription = self.transcribe(instructions, file)
 
         # Return the transcription
         return transcription
-    
 
-    def get_translation(self,file,language) -> str:
+    def get_translation(self, file, language) -> str:
         """
         Generate a translation
-        
+
         file (file): Audio file to translate
         language: Language of the text
 
@@ -489,8 +517,7 @@ class WhisperSTTModelRKNN:
         """
 
         # Send the translation job
-        translation = self.get_transcription(file,language, is_translation=True)
+        translation = self.get_transcription(file, language, is_translation=True)
 
         # Return the translation
         return translation
-    

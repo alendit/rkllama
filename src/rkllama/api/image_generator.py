@@ -54,8 +54,13 @@ from diffusers.utils import (
 )
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, StableDiffusionMixin
-from diffusers.pipelines.stable_diffusion import StableDiffusionPipelineOutput, StableDiffusionSafetyChecker
-from diffusers.pipelines.stable_diffusion_xl.pipeline_output import StableDiffusionXLPipelineOutput
+from diffusers.pipelines.stable_diffusion import (
+    StableDiffusionPipelineOutput,
+    StableDiffusionSafetyChecker,
+)
+from diffusers.pipelines.stable_diffusion_xl.pipeline_output import (
+    StableDiffusionXLPipelineOutput,
+)
 
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
@@ -66,6 +71,7 @@ else:
 
 
 import logging
+
 logging.basicConfig()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -125,9 +131,13 @@ def retrieve_timesteps(
         second element is the number of inference steps.
     """
     if timesteps is not None and sigmas is not None:
-        raise ValueError("Only one of `timesteps` or `sigmas` can be passed. Please choose one to set custom values")
+        raise ValueError(
+            "Only one of `timesteps` or `sigmas` can be passed. Please choose one to set custom values"
+        )
     if timesteps is not None:
-        accepts_timesteps = "timesteps" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
+        accepts_timesteps = "timesteps" in set(
+            inspect.signature(scheduler.set_timesteps).parameters.keys()
+        )
         if not accepts_timesteps:
             raise ValueError(
                 f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
@@ -137,7 +147,9 @@ def retrieve_timesteps(
         timesteps = scheduler.timesteps
         num_inference_steps = len(timesteps)
     elif sigmas is not None:
-        accept_sigmas = "sigmas" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
+        accept_sigmas = "sigmas" in set(
+            inspect.signature(scheduler.set_timesteps).parameters.keys()
+        )
         if not accept_sigmas:
             raise ValueError(
                 f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
@@ -153,92 +165,95 @@ def retrieve_timesteps(
 
 
 class RKNN2Model:
-    """ Wrapper for running RKNPU2 models """
+    """Wrapper for running RKNPU2 models"""
 
-    def __init__(self, model_dir : str, unload_after_first_call : bool = True):
-        
+    def __init__(self, model_dir: str, unload_after_first_call: bool = True):
+
         # Ensure the model exists
-        assert os.path.exists(model_dir) and os.path.exists(os.path.join(model_dir, "model.rknn"))
-        
+        assert os.path.exists(model_dir) and os.path.exists(
+            os.path.join(model_dir, "model.rknn")
+        )
+
         # Save the model path and config
         self.model_dir = os.path.join(model_dir, "model.rknn")
         self.config = json.load(open(os.path.join(model_dir, "config.json")))
         self.modelname = self.model_dir.split("/")[-1]
-        
+
         # Only cretae the RKNNLite object without loading it
         self.rknnlite = RKNNLite()
-        
+
         # Variables to control the load of the model (to save memory in the pipeline)
         self.loaded = False
         self.unload_after_first_call = unload_after_first_call
 
-
     def __call__(self, **kwargs) -> List[np.ndarray]:
-       
+
         # Load the model if not yet loaded
         if not self.loaded:
-            self.load_model()      
-        
-       # Construct the list of input and transform them to Numpy if needed
+            self.load_model()
+
+        # Construct the list of input and transform them to Numpy if needed
         input_list = [value for key, value in kwargs.items()]
         input_list_np = []
         for i, input in enumerate(input_list):
-            print(f"INPUT {i}: type={type(input)}, shape={None if not hasattr(input, 'shape') else input.shape}")
+            print(
+                f"INPUT {i}: type={type(input)}, shape={None if not hasattr(input, 'shape') else input.shape}"
+            )
             if isinstance(input, np.ndarray):
                 input_list_np.append(input)
             else:
                 input_np = input.detach().cpu().numpy().astype(np.float32)
                 input_list_np.append(input_np)
-                print(f"** TRANSFORMED** -> INPUT {i}: type={type(input_np)}, shape={None if not hasattr(input_np, 'shape') else input_np.shape}")
+                print(
+                    f"** TRANSFORMED** -> INPUT {i}: type={type(input_np)}, shape={None if not hasattr(input_np, 'shape') else input_np.shape}"
+                )
 
         # Call the RKNN model wit the input
-        results = self.rknnlite.inference(inputs=input_list_np, data_format='nchw')
+        results = self.rknnlite.inference(inputs=input_list_np, data_format="nchw")
         for res in results:
             print(f"Output shape: {res.shape}")
-        
+
         # Unload the model automatically if requried
         if self.unload_after_first_call:
-           self.unload_model()
-        
+            self.unload_model()
+
         # Return the result
         return results
 
-    
     def load_model(self):
-        
+
         logger.info(f"Loading model: {self.model_dir}")
-        
+
         # Take the init time
         start = time.time()
-        
+
         # Load the model and run time of RKNN
         self.rknnlite.load_rknn(self.model_dir)
         self.rknnlite.init_runtime(core_mask=RKNNLite.NPU_CORE_AUTO)
-        
+
         # Take the finish time
         load_time = time.time() - start
-        
+
         logger.info(f"Load Done. Took {load_time:.1f} seconds.")
-        
+
         # Set the loaded flag
         self.loaded = True
 
-    
     def unload_model(self):
-        
+
         logger.info(f"Unloading model: {self.model_dir}")
-        
+
         # Take the init time
         start = time.time()
-        
+
         # Unload the model
         self.rknnlite.release()
-        
+
         # Take the finish time
         load_time = time.time() - start
-        
+
         logger.info(f"Unload Done. Took {load_time:.1f} seconds.")
-        
+
         # Set the loaded flag
         self.loaded = False
 
@@ -278,7 +293,7 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
         tokenizer_2 (`CLIPTokenizer`):
             Second Tokenizer of class
             [CLIPTokenizer](https://huggingface.co/docs/transformers/v4.21.0/en/model_doc/clip#transformers.CLIPTokenizer).
-    
+
     """
 
     model_cpu_offload_seq = "text_encoder->text_encoder_2->unet->vae"
@@ -294,7 +309,7 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
         unet: RKNN2Model,
         scheduler: LCMScheduler,
         tokenizer_2: CLIPTokenizer,
-        text_encoder_2: Optional[RKNN2Model] = None
+        text_encoder_2: Optional[RKNN2Model] = None,
     ):
         super().__init__()
 
@@ -304,17 +319,21 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
             tokenizer=tokenizer,
             unet=unet,
             scheduler=scheduler,
-            tokenizer_2 = tokenizer_2,
-            text_encoder_2 = text_encoder_2,
+            tokenizer_2=tokenizer_2,
+            text_encoder_2=text_encoder_2,
         )
-        
+
         self.unet = unet
         self.vae_decoder = vae_decoder
         self.tokenizer = tokenizer
         self.tokenizer_2 = tokenizer_2
         self.text_encoder = text_encoder
         self.text_encoder_2 = text_encoder_2
-        self.vae_scale_factor = 2 ** (len(self.vae_decoder.config["block_out_channels"]) - 1) if getattr(self, "vae_decoder", None) else 8
+        self.vae_scale_factor = (
+            2 ** (len(self.vae_decoder.config["block_out_channels"]) - 1)
+            if getattr(self, "vae_decoder", None)
+            else 8
+        )
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.encode_prompt
@@ -380,11 +399,13 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
                 return_tensors="pt",
             )
             text_input_ids = text_inputs.input_ids
-            untruncated_ids = self.tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
+            untruncated_ids = self.tokenizer(
+                prompt, padding="longest", return_tensors="pt"
+            ).input_ids
 
-            if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(
-                text_input_ids, untruncated_ids
-            ):
+            if untruncated_ids.shape[-1] >= text_input_ids.shape[
+                -1
+            ] and not torch.equal(text_input_ids, untruncated_ids):
                 removed_text = self.tokenizer.batch_decode(
                     untruncated_ids[:, self.tokenizer.model_max_length - 1 : -1]
                 )
@@ -392,12 +413,14 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
                     "The following part of your input was truncated because CLIP can only handle sequences up to"
                     f" {self.tokenizer.model_max_length} tokens: {removed_text}"
                 )
-       
-            prompt_embeds = self.text_encoder(input_ids=text_input_ids.to(device).numpy().astype(np.float32))
+
+            prompt_embeds = self.text_encoder(
+                input_ids=text_input_ids.to(device).numpy().astype(np.float32)
+            )
 
             # Initialize the optional second embeds
             text_embeds = None
-            
+
             if self.text_encoder_2:
                 # tokenizer_2 and  text_encoder_2
                 text_inputs_2 = self.tokenizer_2(
@@ -408,11 +431,13 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
                     return_tensors="pt",
                 )
                 text_input_ids_2 = text_inputs_2.input_ids
-                untruncated_ids_2 = self.tokenizer_2(prompt, padding="longest", return_tensors="pt").input_ids
+                untruncated_ids_2 = self.tokenizer_2(
+                    prompt, padding="longest", return_tensors="pt"
+                ).input_ids
 
-                if untruncated_ids_2.shape[-1] >= text_input_ids_2.shape[-1] and not torch.equal(
-                    text_input_ids_2, untruncated_ids_2
-                ):
+                if untruncated_ids_2.shape[-1] >= text_input_ids_2.shape[
+                    -1
+                ] and not torch.equal(text_input_ids_2, untruncated_ids_2):
                     removed_text_2 = self.tokenizer_2.batch_decode(
                         untruncated_ids_2[:, self.tokenizer_2.model_max_length - 1 : -1]
                     )
@@ -420,14 +445,18 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
                         "The following part of your input was truncated because CLIP can only handle sequences up to"
                         f" {self.tokenizer_2.model_max_length} tokens: {removed_text_2}"
                     )
-        
-                text_embeds = self.text_encoder_2(input_ids=text_input_ids_2.to(device).numpy().astype(np.float32))
+
+                text_embeds = self.text_encoder_2(
+                    input_ids=text_input_ids_2.to(device).numpy().astype(np.float32)
+                )
 
         # Return the two embeddings
         return prompt_embeds, text_embeds
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.encode_image
-    def encode_image(self, image, device, num_images_per_prompt, output_hidden_states=None):
+    def encode_image(
+        self, image, device, num_images_per_prompt, output_hidden_states=None
+    ):
         dtype = next(self.image_encoder.parameters()).dtype
 
         if not isinstance(image, torch.Tensor):
@@ -435,13 +464,19 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
 
         image = image.to(device=device, dtype=dtype)
         if output_hidden_states:
-            image_enc_hidden_states = self.image_encoder(image, output_hidden_states=True).hidden_states[-2]
-            image_enc_hidden_states = image_enc_hidden_states.repeat_interleave(num_images_per_prompt, dim=0)
+            image_enc_hidden_states = self.image_encoder(
+                image, output_hidden_states=True
+            ).hidden_states[-2]
+            image_enc_hidden_states = image_enc_hidden_states.repeat_interleave(
+                num_images_per_prompt, dim=0
+            )
             uncond_image_enc_hidden_states = self.image_encoder(
                 torch.zeros_like(image), output_hidden_states=True
             ).hidden_states[-2]
-            uncond_image_enc_hidden_states = uncond_image_enc_hidden_states.repeat_interleave(
-                num_images_per_prompt, dim=0
+            uncond_image_enc_hidden_states = (
+                uncond_image_enc_hidden_states.repeat_interleave(
+                    num_images_per_prompt, dim=0
+                )
             )
             return image_enc_hidden_states, uncond_image_enc_hidden_states
         else:
@@ -453,7 +488,12 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_ip_adapter_image_embeds
     def prepare_ip_adapter_image_embeds(
-        self, ip_adapter_image, ip_adapter_image_embeds, device, num_images_per_prompt, do_classifier_free_guidance
+        self,
+        ip_adapter_image,
+        ip_adapter_image_embeds,
+        device,
+        num_images_per_prompt,
+        do_classifier_free_guidance,
     ):
         image_embeds = []
         if do_classifier_free_guidance:
@@ -462,7 +502,9 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
             if not isinstance(ip_adapter_image, list):
                 ip_adapter_image = [ip_adapter_image]
 
-            if len(ip_adapter_image) != len(self.unet.encoder_hid_proj.image_projection_layers):
+            if len(ip_adapter_image) != len(
+                self.unet.encoder_hid_proj.image_projection_layers
+            ):
                 raise ValueError(
                     f"`ip_adapter_image` must have same length as the number of IP Adapters. Got {len(ip_adapter_image)} images and {len(self.unet.encoder_hid_proj.image_projection_layers)} IP Adapters."
                 )
@@ -481,16 +523,24 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
         else:
             for single_image_embeds in ip_adapter_image_embeds:
                 if do_classifier_free_guidance:
-                    single_negative_image_embeds, single_image_embeds = single_image_embeds.chunk(2)
+                    single_negative_image_embeds, single_image_embeds = (
+                        single_image_embeds.chunk(2)
+                    )
                     negative_image_embeds.append(single_negative_image_embeds)
                 image_embeds.append(single_image_embeds)
 
         ip_adapter_image_embeds = []
         for i, single_image_embeds in enumerate(image_embeds):
-            single_image_embeds = torch.cat([single_image_embeds] * num_images_per_prompt, dim=0)
+            single_image_embeds = torch.cat(
+                [single_image_embeds] * num_images_per_prompt, dim=0
+            )
             if do_classifier_free_guidance:
-                single_negative_image_embeds = torch.cat([negative_image_embeds[i]] * num_images_per_prompt, dim=0)
-                single_image_embeds = torch.cat([single_negative_image_embeds, single_image_embeds], dim=0)
+                single_negative_image_embeds = torch.cat(
+                    [negative_image_embeds[i]] * num_images_per_prompt, dim=0
+                )
+                single_image_embeds = torch.cat(
+                    [single_negative_image_embeds, single_image_embeds], dim=0
+                )
 
             single_image_embeds = single_image_embeds.to(device=device)
             ip_adapter_image_embeds.append(single_image_embeds)
@@ -503,18 +553,37 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
             has_nsfw_concept = None
         else:
             if torch.is_tensor(image):
-                feature_extractor_input = self.image_processor.postprocess(image, output_type="pil")
+                feature_extractor_input = self.image_processor.postprocess(
+                    image, output_type="pil"
+                )
             else:
                 feature_extractor_input = self.image_processor.numpy_to_pil(image)
-            safety_checker_input = self.feature_extractor(feature_extractor_input, return_tensors="pt").to(device)
+            safety_checker_input = self.feature_extractor(
+                feature_extractor_input, return_tensors="pt"
+            ).to(device)
             image, has_nsfw_concept = self.safety_checker(
                 images=image, clip_input=safety_checker_input.pixel_values.to(dtype)
             )
         return image, has_nsfw_concept
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_latents
-    def prepare_latents(self, batch_size, num_channels_latents, height, width, dtype, device, generator, latents=None):
-        shape = (batch_size, num_channels_latents, height // self.vae_scale_factor, width // self.vae_scale_factor)
+    def prepare_latents(
+        self,
+        batch_size,
+        num_channels_latents,
+        height,
+        width,
+        dtype,
+        device,
+        generator,
+        latents=None,
+    ):
+        shape = (
+            batch_size,
+            num_channels_latents,
+            height // self.vae_scale_factor,
+            width // self.vae_scale_factor,
+        )
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
                 f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
@@ -532,13 +601,14 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
                     f" {type(generator)}."
                 )
         elif latents.shape != shape:
-            raise ValueError(f"Unexpected latents shape, got {latents.shape}, expected {shape}")
+            raise ValueError(
+                f"Unexpected latents shape, got {latents.shape}, expected {shape}"
+            )
 
         # scale the initial noise by the standard deviation required by the scheduler
         latents = latents * np.float64(self.scheduler.init_noise_sigma)
         return latents
 
-    
     def get_guidance_scale_embedding(self, w, embedding_dim=512, dtype=None):
         """
         See https://github.com/google-research/vdm/blob/dc27b98a554f65cdc654b800da5aa1846545d41b/model_vdm.py#L298
@@ -572,26 +642,36 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
         # eta corresponds to η in DDIM paper: https://huggingface.co/papers/2010.02502
         # and should be between [0, 1]
 
-        accepts_eta = "eta" in set(inspect.signature(self.scheduler.step).parameters.keys())
+        accepts_eta = "eta" in set(
+            inspect.signature(self.scheduler.step).parameters.keys()
+        )
         extra_step_kwargs = {}
         if accepts_eta:
             extra_step_kwargs["eta"] = eta
 
         # check if the scheduler accepts generator
-        accepts_generator = "generator" in set(inspect.signature(self.scheduler.step).parameters.keys())
+        accepts_generator = "generator" in set(
+            inspect.signature(self.scheduler.step).parameters.keys()
+        )
         if accepts_generator:
             extra_step_kwargs["generator"] = generator
         return extra_step_kwargs
 
     def _get_add_time_ids(
-        self, original_size, crops_coords_top_left, target_size, dtype, text_encoder_projection_dim=None
+        self,
+        original_size,
+        crops_coords_top_left,
+        target_size,
+        dtype,
+        text_encoder_projection_dim=None,
     ):
         add_time_ids = list(original_size + crops_coords_top_left + target_size)
 
         passed_add_embed_dim = (
-            self.unet.config["addition_time_embed_dim"] * len(add_time_ids) + text_encoder_projection_dim
+            self.unet.config["addition_time_embed_dim"] * len(add_time_ids)
+            + text_encoder_projection_dim
         )
-        #expected_add_embed_dim = self.unet.add_embedding.linear_1.in_featuores
+        # expected_add_embed_dim = self.unet.add_embedding.linear_1.in_featuores
         expected_add_embed_dim = passed_add_embed_dim
 
         if expected_add_embed_dim != passed_add_embed_dim:
@@ -601,7 +681,6 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
 
         add_time_ids = torch.tensor([add_time_ids], dtype=dtype)
         return add_time_ids
-
 
     # Currently StableDiffusionPipeline.check_inputs with negative prompt stuff removed
     def check_inputs(
@@ -616,16 +695,21 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
         callback_on_step_end_tensor_inputs=None,
     ):
         if height % 8 != 0 or width % 8 != 0:
-            raise ValueError(f"`height` and `width` have to be divisible by 8 but are {height} and {width}.")
+            raise ValueError(
+                f"`height` and `width` have to be divisible by 8 but are {height} and {width}."
+            )
 
-        if callback_steps is not None and (not isinstance(callback_steps, int) or callback_steps <= 0):
+        if callback_steps is not None and (
+            not isinstance(callback_steps, int) or callback_steps <= 0
+        ):
             raise ValueError(
                 f"`callback_steps` has to be a positive integer but is {callback_steps} of type"
                 f" {type(callback_steps)}."
             )
 
         if callback_on_step_end_tensor_inputs is not None and not all(
-            k in self._callback_tensor_inputs for k in callback_on_step_end_tensor_inputs
+            k in self._callback_tensor_inputs
+            for k in callback_on_step_end_tensor_inputs
         ):
             raise ValueError(
                 f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"
@@ -640,8 +724,12 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
             raise ValueError(
                 "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
             )
-        elif prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
-            raise ValueError(f"`prompt` has to be of type `str` or `list` but is {type(prompt)}")
+        elif prompt is not None and (
+            not isinstance(prompt, str) and not isinstance(prompt, list)
+        ):
+            raise ValueError(
+                f"`prompt` has to be of type `str` or `list` but is {type(prompt)}"
+            )
 
         if ip_adapter_image is not None and ip_adapter_image_embeds is not None:
             raise ValueError(
@@ -692,7 +780,7 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
         num_images_per_prompt: Optional[int] = 1,
         generator: Optional[Union[np.random.RandomState, torch.Generator]] = None,
         latents: Optional[torch.Tensor] = None,
-        prompt_embeds:Optional[np.ndarray] = None,
+        prompt_embeds: Optional[np.ndarray] = None,
         ip_adapter_image: Optional[PipelineImageInput] = None,
         ip_adapter_image_embeds: Optional[List[torch.Tensor]] = None,
         output_type: Optional[str] = "pil",
@@ -830,7 +918,9 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
 
         # 3. Encode input prompt
         lora_scale = (
-            self.cross_attention_kwargs.get("scale", None) if self.cross_attention_kwargs is not None else None
+            self.cross_attention_kwargs.get("scale", None)
+            if self.cross_attention_kwargs is not None
+            else None
         )
 
         # NOTE: when a LCM is distilled from an LDM via latent consistency distillation (Algorithm 1) with guided
@@ -850,14 +940,17 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
         )
         encode_prompt_time = time.time() - start_time
         logger.debug(f"Prompt encoding time: {encode_prompt_time:.2f}s")
-        
+
         prompt_embeds = prompt_embeds_np[0]
         text_embeds = text_embeds_np[0] if text_embeds_np else None
-        
-          
+
         # 4. Prepare timesteps
         timesteps, num_inference_steps = retrieve_timesteps(
-            self.scheduler, num_inference_steps, device, timesteps, original_inference_steps=original_inference_steps
+            self.scheduler,
+            num_inference_steps,
+            device,
+            timesteps,
+            original_inference_steps=original_inference_steps,
         )
 
         # 5. Prepare latent variable
@@ -872,7 +965,7 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
             generator,
             latents,
         )
-	    
+
         bs = batch_size * num_images_per_prompt
 
         # Adapted from diffusers to extend it for other runtimes than ORT
@@ -881,7 +974,9 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
         # 6. Get Guidance Scale Embedding
         w = np.full(bs, guidance_scale - 1, dtype=prompt_embeds.dtype)
         w_embedding = self.get_guidance_scale_embedding(
-            w, embedding_dim=self.unet.config["time_cond_proj_dim"], dtype=prompt_embeds.dtype
+            w,
+            embedding_dim=self.unet.config["time_cond_proj_dim"],
+            dtype=prompt_embeds.dtype,
         )
 
         # 7. Prepare added time ids if required
@@ -889,7 +984,7 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
             text_encoder_projection_dim = self.text_encoder_2.config["projection_dim"]
             time_ids = self._get_add_time_ids(
                 original_size,
-                (0, 0), # crops_coords_top_left
+                (0, 0),  # crops_coords_top_left
                 target_size,
                 dtype=torch.float32,
                 text_encoder_projection_dim=text_encoder_projection_dim,
@@ -899,7 +994,7 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
         # 8. LCM MultiStep Sampling Loop:
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         self._num_timesteps = len(timesteps)
-        
+
         # Begin image generation
         inference_start = time.time()
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -909,55 +1004,67 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
 
                 # model prediction (v-prediction, eps, x)
                 if self.text_encoder_2:
-                   # LCM SSD1B
+                    # LCM SSD1B
 
-                   # Auxiliary calculations
-                   hidden_state = np.concatenate([prompt_embeds, text_embeds_np[1]], axis=-1)
+                    # Auxiliary calculations
+                    hidden_state = np.concatenate(
+                        [prompt_embeds, text_embeds_np[1]], axis=-1
+                    )
 
-                   # Run the model
-                   model_pred = self.unet(
-                      sample=latents,
-                      timestep=timestep,
-                      encoder_hidden_states=hidden_state,
-                      timestep_cond=w_embedding,
-                      time_ids=time_ids,
-                      text_embeds=text_embeds,  
-                   )[0]
-                
+                    # Run the model
+                    model_pred = self.unet(
+                        sample=latents,
+                        timestep=timestep,
+                        encoder_hidden_states=hidden_state,
+                        timestep_cond=w_embedding,
+                        time_ids=time_ids,
+                        text_embeds=text_embeds,
+                    )[0]
+
                 else:
-                   # LCM SSD 1.5
+                    # LCM SSD 1.5
 
-                   # Run the model
-                   model_pred = self.unet(
-                      sample=latents,
-                      timestep=timestep,
-                      encoder_hidden_states=prompt_embeds,
-                      timestep_cond=w_embedding
-                   )[0]
-                
+                    # Run the model
+                    model_pred = self.unet(
+                        sample=latents,
+                        timestep=timestep,
+                        encoder_hidden_states=prompt_embeds,
+                        timestep_cond=w_embedding,
+                    )[0]
+
                 # compute the previous noisy sample x_t -> x_t-1
-                latents, denoised = self.scheduler.step(torch.from_numpy(model_pred), t, torch.from_numpy(latents), return_dict=False)
+                latents, denoised = self.scheduler.step(
+                    torch.from_numpy(model_pred),
+                    t,
+                    torch.from_numpy(latents),
+                    return_dict=False,
+                )
                 latents, denoised = latents.numpy(), denoised.numpy()
                 # call the callback, if provided
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                if i == len(timesteps) - 1 or (
+                    (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
+                ):
                     progress_bar.update()
                     if callback is not None and i % callback_steps == 0:
                         step_idx = i // getattr(self.scheduler, "order", 1)
                         callback(step_idx, t, latents)
-        
+
         inference_time = time.time() - inference_start
         logger.debug(f"Inference time: {inference_time:.2f}s")
 
         # Unload the UNET model for memory saving
         self.unet.unload_model()
 
-        #denoised = denoised.to(prompt_embeds.dtype)
+        # denoised = denoised.to(prompt_embeds.dtype)
         decode_start = time.time()
         if not output_type == "latent":
             denoised /= self.vae_decoder.config["scaling_factor"]
             # it seems likes there is a strange result for using half-precision vae decoder if batchsize>1
             image = np.concatenate(
-                [self.vae_decoder(latent_sample=denoised[i : i + 1])[0] for i in range(denoised.shape[0])]
+                [
+                    self.vae_decoder(latent_sample=denoised[i : i + 1])[0]
+                    for i in range(denoised.shape[0])
+                ]
             )
             # image, has_nsfw_concept = self.run_safety_checker(image)
             has_nsfw_concept = None  # skip safety checker
@@ -970,7 +1077,9 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
         else:
             do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
 
-        image = self.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
+        image = self.postprocess(
+            image, output_type=output_type, do_denormalize=do_denormalize
+        )
         decode_time = time.time() - decode_start
         print(f"Decode time: {decode_time:.2f}s")
 
@@ -980,15 +1089,16 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
         if not return_dict:
             return (image, has_nsfw_concept)
 
-        return StableDiffusionPipelineOutput(images=image, nsfw_content_detected=has_nsfw_concept)
-
+        return StableDiffusionPipelineOutput(
+            images=image, nsfw_content_detected=has_nsfw_concept
+        )
 
     @staticmethod
     def postprocess(
         image: np.ndarray,
         output_type: str = "pil",
         do_denormalize: Optional[List[bool]] = None,
-        ):
+    ):
         def numpy_to_pil(images: np.ndarray):
             """
             Convert a numpy image or a batch of images to a PIL image.
@@ -998,18 +1108,20 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
             images = (images * 255).round().astype("uint8")
             if images.shape[-1] == 1:
                 # special case for grayscale (single channel) images
-                pil_images = [Image.fromarray(image.squeeze(), mode="L") for image in images]
+                pil_images = [
+                    Image.fromarray(image.squeeze(), mode="L") for image in images
+                ]
             else:
                 pil_images = [Image.fromarray(image) for image in images]
 
             return pil_images
-        
+
         def denormalize(images: np.ndarray):
             """
             Denormalize an image array to [0,1].
             """
             return np.clip(images / 2 + 0.5, 0, 1)
-    
+
         if not isinstance(image, np.ndarray):
             raise ValueError(
                 f"Input for postprocessing is in incorrect format: {type(image)}. We only support np array"
@@ -1024,12 +1136,16 @@ class RKNNLatentConsistencyModelPipeline(DiffusionPipeline):
 
         if output_type == "latent":
             return image
-        
+
         if do_denormalize is None:
             raise ValueError("do_denormalize is required for postprocessing")
 
         image = np.stack(
-            [denormalize(image[i]) if do_denormalize[i] else image[i] for i in range(image.shape[0])], axis=0
+            [
+                denormalize(image[i]) if do_denormalize[i] else image[i]
+                for i in range(image.shape[0])
+            ],
+            axis=0,
         )
         image = image.transpose((0, 2, 3, 1))
 
@@ -1053,13 +1169,17 @@ def generate_image(model_dir, prompt, size, seed, num_inference_steps, guidance_
     if os.path.exists(os.path.join(model_dir, "text_encoder_2")):
         logger.info(f"Running LCM SSD1B")
         pipe = RKNNLatentConsistencyModelPipeline(
-	        scheduler=user_specified_scheduler,
+            scheduler=user_specified_scheduler,
             vae_decoder=RKNN2Model(os.path.join(model_dir, "vae_decoder")),
             unet=RKNN2Model(os.path.join(model_dir, "unet"), False),
             text_encoder=RKNN2Model(os.path.join(model_dir, "text_encoder")),
             text_encoder_2=RKNN2Model(os.path.join(model_dir, "text_encoder_2")),
-            tokenizer=CLIPTokenizer.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="tokenizer"),
-	        tokenizer_2=CLIPTokenizer.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="tokenizer_2"),
+            tokenizer=CLIPTokenizer.from_pretrained(
+                "stabilityai/stable-diffusion-xl-base-1.0", subfolder="tokenizer"
+            ),
+            tokenizer_2=CLIPTokenizer.from_pretrained(
+                "stabilityai/stable-diffusion-xl-base-1.0", subfolder="tokenizer_2"
+            ),
         )
     else:
         logger.info(f"Running LCM SD 1.5")
@@ -1069,7 +1189,9 @@ def generate_image(model_dir, prompt, size, seed, num_inference_steps, guidance_
             unet=RKNN2Model(os.path.join(model_dir, "unet"), False),
             text_encoder=RKNN2Model(os.path.join(model_dir, "text_encoder")),
             text_encoder_2=None,
-            tokenizer=CLIPTokenizer.from_pretrained("SimianLuo/LCM_Dreamshaper_v7", subfolder="tokenizer"),
+            tokenizer=CLIPTokenizer.from_pretrained(
+                "SimianLuo/LCM_Dreamshaper_v7", subfolder="tokenizer"
+            ),
             tokenizer_2=None,
         )
 

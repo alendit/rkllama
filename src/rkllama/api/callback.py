@@ -16,12 +16,16 @@ def callback_impl(result, userdata, status):
 
     if status == LLMCallState.RKLLM_RUN_FINISH:
         global_status = status
-        
+
         # Get the metrics for the current inference
         prefill_tokens = result.contents.perf.prefill_tokens
         generate_tokens = result.contents.perf.generate_tokens
-        prefill_time_ms = int(result.contents.perf.prefill_time_ms) # Float to Int for compliance Ollama Pyhton package
-        generate_time_ms = int(result.contents.perf.generate_time_ms) # Float to Int for compliance Ollama Pyhton package
+        prefill_time_ms = int(
+            result.contents.perf.prefill_time_ms
+        )  # Float to Int for compliance Ollama Pyhton package
+        generate_time_ms = int(
+            result.contents.perf.generate_time_ms
+        )  # Float to Int for compliance Ollama Pyhton package
 
         # Add the metrics to the global variable
         global_metrics.clear()
@@ -29,7 +33,7 @@ def callback_impl(result, userdata, status):
         global_metrics.append(generate_tokens)
         global_metrics.append(prefill_time_ms)
         global_metrics.append(generate_time_ms)
-        
+
         print("\n")
         sys.stdout.flush()
     elif status == LLMCallState.RKLLM_RUN_ERROR:
@@ -50,12 +54,12 @@ def callback_impl(result, userdata, status):
                         text_bytes = bytes(text_bytes)
                     except:
                         text_bytes = b""
-                        
+
                 # Now safely concatenate
                 try:
-                    decoded_text = (split_byte_data + text_bytes).decode('utf-8')
+                    decoded_text = (split_byte_data + text_bytes).decode("utf-8")
                     global_text.append(decoded_text)
-                    print(decoded_text, end='')
+                    print(decoded_text, end="")
                     split_byte_data = bytes(b"")
                 except UnicodeDecodeError:
                     # Handle incomplete UTF-8 sequences
@@ -65,38 +69,47 @@ def callback_impl(result, userdata, status):
                 if split_byte_data:
                     try:
                         # Try to decode any accumulated bytes
-                        decoded_text = split_byte_data.decode('utf-8')
+                        decoded_text = split_byte_data.decode("utf-8")
                         global_text.append(decoded_text)
-                        print(decoded_text, end='')
+                        print(decoded_text, end="")
                         split_byte_data = bytes(b"")
                     except UnicodeDecodeError:
                         # Still incomplete, keep for next time
                         pass
-            
+
             # --- EMBEDDINGS Part---
-            if result and result.contents and result.contents.last_hidden_layer.hidden_states and result.contents.last_hidden_layer.embd_size > 0:
+            if (
+                result
+                and result.contents
+                and result.contents.last_hidden_layer.hidden_states
+                and result.contents.last_hidden_layer.embd_size > 0
+            ):
                 num_tokens = result.contents.last_hidden_layer.num_tokens
                 embd_size = result.contents.last_hidden_layer.embd_size
 
                 # Only if tokens generated
                 if num_tokens > 0:
                     # Construct the embed array
-                    last_token_embedding = np.array([
-                        result.contents.last_hidden_layer.hidden_states[(num_tokens-1) * embd_size + i] 
-                        for i in range(embd_size)
-                    ])
+                    last_token_embedding = np.array(
+                        [
+                            result.contents.last_hidden_layer.hidden_states[
+                                (num_tokens - 1) * embd_size + i
+                            ]
+                            for i in range(embd_size)
+                        ]
+                    )
                     # Save the values
                     embeddings = {
-                        'embedding': last_token_embedding,
-                        'embd_size': embd_size,
-                        'num_tokens': num_tokens
+                        "embedding": last_token_embedding,
+                        "embd_size": embd_size,
+                        "num_tokens": num_tokens,
                     }
 
                     # Send to the global variable
                     last_embeddings.append(embeddings)
                     print(f"\n✅ Embeddings Shape: {last_token_embedding.shape}")
-        
+
         except Exception as e:
-            print(f"\nError processing callback: {str(e)}", end='')
-            
-        sys.stdout.flush()    
+            print(f"\nError processing callback: {str(e)}", end="")
+
+        sys.stdout.flush()

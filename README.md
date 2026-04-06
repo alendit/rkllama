@@ -52,6 +52,8 @@ A server to run and interact with LLM models optimized for Rockchip RK3588(S) an
    * `/v1/completions`
    * `/v1/chat/completions`
    * `/v1/embeddings`
+   * `/v1/models`
+   * `/v1/models/:model`
    * `/v1/images/generations`
    * `/v1/audio/speech`
    * `/v1/audio/transcriptions`

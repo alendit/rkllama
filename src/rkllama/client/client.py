@@ -11,7 +11,9 @@ import rkllama.config
 STREAM_MODE = True
 VERBOSE = False
 HISTORY = []
-PREFIX_MESSAGE = "<|im_start|>system You are a helpful assistant. <|im_end|> <|im_start|>user"
+PREFIX_MESSAGE = (
+    "<|im_start|>system You are a helpful assistant. <|im_end|> <|im_start|>user"
+)
 SUFFIX_MESSAGE = "<|im_end|><|im_start|>assistant"
 
 RESET = "\033[0m"
@@ -29,17 +31,30 @@ API_URL = f"http://127.0.0.1:{PORT}/"
 def print_help():
     print(f"{CYAN}{BOLD}Available commands:{RESET}")
     print(f"{YELLOW}help{RESET}                     : Displays this help menu.")
-    print(f"{YELLOW}update{RESET}                   : Checks for available updates and upgrades.")
+    print(
+        f"{YELLOW}update{RESET}                   : Checks for available updates and upgrades."
+    )
     print(f"{YELLOW}serve{RESET}                    : Starts the server.")
-    print(f"{YELLOW}list{RESET}                     : Lists all available models on the server.")
-    print(f"{YELLOW}info{RESET}                     : Show informations for a specific model.")
-    print(f"{YELLOW}pull hf/model/file.rkllm{RESET} : Downloads a model via a file from Hugging Face.")
+    print(
+        f"{YELLOW}list{RESET}                     : Lists all available models on the server."
+    )
+    print(
+        f"{YELLOW}info{RESET}                     : Show informations for a specific model."
+    )
+    print(
+        f"{YELLOW}pull hf/model/file.rkllm{RESET} : Downloads a model via a file from Hugging Face."
+    )
     print(f"{YELLOW}rm model.rkllm{RESET}           : Remove the model.")
     print(f"{YELLOW}load model.rkllm{RESET}         : Loads a specific model.")
     print(f"{YELLOW}unload model.rkllm{RESET}       : Unloads a specific model.")
-    print(f"{YELLOW}ps{RESET}                       : List running models in the server.")
-    print(f"{YELLOW}run{RESET}                      : Enters conversation mode with the model.")
+    print(
+        f"{YELLOW}ps{RESET}                       : List running models in the server."
+    )
+    print(
+        f"{YELLOW}run{RESET}                      : Enters conversation mode with the model."
+    )
     print(f"{YELLOW}exit{RESET}                     : Exits the program.")
+
 
 def print_help_chat():
     print(f"{CYAN}{BOLD}Available commands:{RESET}")
@@ -62,6 +77,7 @@ def check_status():
     except:
         return 500
 
+
 # Retrieves the list of available templates from the server.
 def list_models():
     try:
@@ -72,9 +88,12 @@ def list_models():
             for model in models:
                 print(f"- {model}")
         else:
-            print(f"{RED}Error retrieving models: {response.status_code} - {response.text}{RESET}")
+            print(
+                f"{RED}Error retrieving models: {response.status_code} - {response.text}{RESET}"
+            )
     except requests.RequestException as e:
         print(f"{RED}Query error: {e}{RESET}")
+
 
 # Retrieves the list of running models in the server.
 def list_running_models():
@@ -86,10 +105,10 @@ def list_running_models():
                 print(f"{YELLOW}No model currently loaded.{RESET}")
                 return
 
-            _ansi_re = re.compile(r'\033\[[0-9;]*m')
+            _ansi_re = re.compile(r"\033\[[0-9;]*m")
 
             def visible_len(s):
-                return len(_ansi_re.sub('', s))
+                return len(_ansi_re.sub("", s))
 
             W = 55
 
@@ -105,25 +124,27 @@ def list_running_models():
             print(f"\n{CYAN}{BOLD}Running models:{RESET}")
 
             for i, model in enumerate(models):
-                details  = model.get("details", {})
-                size_mb  = model.get("size", 0) / 1_073_741_824
+                details = model.get("details", {})
+                size_mb = model.get("size", 0) / 1_073_741_824
 
                 print(sep_top)
-                print(row("Model",           f"{BOLD}{model.get('name', '?')}{RESET}"))
-                print(row("Format",          f"{details.get('format', '?')}"))
-                print(row("Family",          f"{details.get('family', '?')}"))
-                print(row("Parameter size",  f"{details.get('parameter_size', '?')}"))
-                print(row("Quantization",    f"{details.get('quantization_level', '?')}"))
-                print(row("Size (GB)",       f"{GREEN}{size_mb:.2f} GB{RESET}"))
+                print(row("Model", f"{BOLD}{model.get('name', '?')}{RESET}"))
+                print(row("Format", f"{details.get('format', '?')}"))
+                print(row("Family", f"{details.get('family', '?')}"))
+                print(row("Parameter size", f"{details.get('parameter_size', '?')}"))
+                print(row("Quantization", f"{details.get('quantization_level', '?')}"))
+                print(row("Size (GB)", f"{GREEN}{size_mb:.2f} GB{RESET}"))
                 print(sep_mid)
-                print(row("Loaded at",       f"{CYAN}{model.get('loaded_at', '?')}{RESET}"))
-                print(row("Last call",       f"{CYAN}{model.get('last_call', '?')}{RESET}"))
-                print(row("Expiration",      f"{CYAN}{model.get('expires_at', '?')}{RESET}"))
+                print(row("Loaded at", f"{CYAN}{model.get('loaded_at', '?')}{RESET}"))
+                print(row("Last call", f"{CYAN}{model.get('last_call', '?')}{RESET}"))
+                print(row("Expiration", f"{CYAN}{model.get('expires_at', '?')}{RESET}"))
                 print(sep_bot)
                 if i < len(models) - 1:
                     print()
         else:
-            print(f"{RED}Error retrieving running models: {response.status_code} - {response.text}{RESET}")
+            print(
+                f"{RED}Error retrieving running models: {response.status_code} - {response.text}{RESET}"
+            )
     except requests.RequestException as e:
         print(f"{RED}Query error: {e}{RESET}")
 
@@ -132,7 +153,11 @@ def list_running_models():
 def load_model(model_name, From=None, huggingface_path=None):
 
     if From != None and huggingface_path != None:
-        payload = {"model_name": model_name, "huggingface_path": huggingface_path, "from": From}
+        payload = {
+            "model_name": model_name,
+            "huggingface_path": huggingface_path,
+            "from": From,
+        }
     else:
         payload = {"model_name": model_name}
 
@@ -142,7 +167,9 @@ def load_model(model_name, From=None, huggingface_path=None):
             print(f"{GREEN}{BOLD}Model {model_name} loaded successfully.{RESET}")
             return True
         else:
-            print(f"{RED}Error loading model: {response.status_code} - {response.json().get('error', response.text)}{RESET}")
+            print(
+                f"{RED}Error loading model: {response.status_code} - {response.json().get('error', response.text)}{RESET}"
+            )
         return False
     except requests.RequestException as e:
         print(f"{RED}Query error: {e}{RESET}")
@@ -152,11 +179,15 @@ def load_model(model_name, From=None, huggingface_path=None):
 # Unloads the currently loaded model.
 def unload_model(model_name):
     try:
-        response = requests.post(API_URL + "unload_model", json={"model_name": model_name})
+        response = requests.post(
+            API_URL + "unload_model", json={"model_name": model_name}
+        )
         if response.status_code == 200:
             print(f"{GREEN}{BOLD}Model successfully unloaded.{RESET}")
         else:
-            print(f"{RED}Error when unloading model: {response.status_code} - {response.json().get('error', response.text)}{RESET}")
+            print(
+                f"{RED}Error when unloading model: {response.status_code} - {response.json().get('error', response.text)}{RESET}"
+            )
     except requests.RequestException as e:
         print(f"{RED}Query error: {e}{RESET}")
 
@@ -165,19 +196,19 @@ def _print_verbose(usage, model_name="?", finish_reason="?"):
     """Display a formatted verbose statistics block after a response."""
     W = 49  # inner visible width
 
-    prompt_tokens     = usage.get("prompt_tokens", 0)
+    prompt_tokens = usage.get("prompt_tokens", 0)
     completion_tokens = usage.get("completion_tokens", 0)
-    total_tokens      = usage.get("total_tokens", 0)
-    tps               = usage.get("tokens_per_second", 0)
-    prompt_dur        = usage.get("prompt_eval_duration", 0)
-    eval_dur          = usage.get("eval_duration", 0)
-    total_dur         = usage.get("total_duration", 0)
-    load_dur          = usage.get("load_duration", 0)
+    total_tokens = usage.get("total_tokens", 0)
+    tps = usage.get("tokens_per_second", 0)
+    prompt_dur = usage.get("prompt_eval_duration", 0)
+    eval_dur = usage.get("eval_duration", 0)
+    total_dur = usage.get("total_duration", 0)
+    load_dur = usage.get("load_duration", 0)
 
-    _ansi_re = re.compile(r'\033\[[0-9;]*m')
+    _ansi_re = re.compile(r"\033\[[0-9;]*m")
 
     def visible_len(s):
-        return len(_ansi_re.sub('', s))
+        return len(_ansi_re.sub("", s))
 
     def row(label, value):
         prefix = f"  {label:<26} "
@@ -192,14 +223,19 @@ def _print_verbose(usage, model_name="?", finish_reason="?"):
     print(row("Model", f"{BOLD}{model_name}{RESET}"))
     print(row("Finish reason", f"{BOLD}{finish_reason}{RESET}"))
     print(sep_mid)
-    print(row("Prompt tokens",  f"{GREEN}{prompt_tokens}{RESET}"))
-    print(row("Generated tokens", f"{GREEN}{completion_tokens}{RESET}  (total: {GREEN}{total_tokens}{RESET})"))
-    print(row("Tokens/sec",   f"{GREEN}{tps}{RESET}"))
+    print(row("Prompt tokens", f"{GREEN}{prompt_tokens}{RESET}"))
+    print(
+        row(
+            "Generated tokens",
+            f"{GREEN}{completion_tokens}{RESET}  (total: {GREEN}{total_tokens}{RESET})",
+        )
+    )
+    print(row("Tokens/sec", f"{GREEN}{tps}{RESET}"))
     print(sep_mid)
-    print(row("Model load",     f"{CYAN}{load_dur:.3f}s{RESET}"))
-    print(row("Prompt tokenization",   f"{CYAN}{prompt_dur:.3f}s{RESET}"))
-    print(row("Response generation",    f"{CYAN}{eval_dur:.3f}s{RESET}"))
-    print(row("Total duration",          f"{CYAN}{total_dur:.3f}s{RESET}"))
+    print(row("Model load", f"{CYAN}{load_dur:.3f}s{RESET}"))
+    print(row("Prompt tokenization", f"{CYAN}{prompt_dur:.3f}s{RESET}"))
+    print(row("Response generation", f"{CYAN}{eval_dur:.3f}s{RESET}"))
+    print(row("Total duration", f"{CYAN}{total_dur:.3f}s{RESET}"))
     print(sep_bot)
 
 
@@ -212,40 +248,43 @@ def send_message(model, message):
     # if VERBOSE == True:
     #     print(HISTORY)
 
-    payload = {
-        "model" : model,
-        "messages": HISTORY,
-        "stream": STREAM_MODE
-    }
-
+    payload = {"model": model, "messages": HISTORY, "stream": STREAM_MODE}
 
     try:
         if STREAM_MODE:
-            with requests.post(API_URL + "v1/chat/completions", json=payload, stream=True) as response:
-                
+            with requests.post(
+                API_URL + "v1/chat/completions", json=payload, stream=True
+            ) as response:
+
                 if response.status_code == 200:
                     print(f"{CYAN}{BOLD}Assistant:{RESET} ", end="")
                     assistant_message = ""
-                    finish_reason     = ""
-                    final_json        = {
-                        "usage": {}
-                    }
+                    finish_reason = ""
+                    final_json = {"usage": {}}
 
                     for line in response.iter_lines(decode_unicode=True):
                         if line:
                             try:
                                 json_line_striped = line.removeprefix("data: ").strip()
                                 if json_line_striped != "[DONE]":
-                                    response_json = json.loads(json_line_striped) 
-                                    
+                                    response_json = json.loads(json_line_striped)
+
                                     final_json = response_json
 
-                                    if len(response_json["choices"]) > 0 and "delta" in response_json["choices"][0].keys():
-                                        content_chunk = response_json["choices"][0]["delta"]["content"]
+                                    if (
+                                        len(response_json["choices"]) > 0
+                                        and "delta"
+                                        in response_json["choices"][0].keys()
+                                    ):
+                                        content_chunk = response_json["choices"][0][
+                                            "delta"
+                                        ]["content"]
                                         sys.stdout.write(content_chunk)
                                         sys.stdout.flush()
                                         assistant_message += content_chunk
-                                        fr = response_json["choices"][0].get("finish_reason")
+                                        fr = response_json["choices"][0].get(
+                                            "finish_reason"
+                                        )
                                         if fr:
                                             finish_reason = fr
                             except json.JSONDecodeError:
@@ -262,30 +301,37 @@ def send_message(model, message):
                     print("\n")
 
                 else:
-                    print(f"{RED}Streaming error: {response.status_code} - {response.text}{RESET}")
+                    print(
+                        f"{RED}Streaming error: {response.status_code} - {response.text}{RESET}"
+                    )
 
         else:
             response = requests.post(API_URL + "v1/chat/completions", json=payload)
             if response.status_code == 200:
-                
+
                 response_json = response.json()
                 assistant_message = response_json["choices"][0]["message"]["content"]
                 print(f"{CYAN}{BOLD}Assistant:{RESET} {assistant_message}")
 
                 if VERBOSE == True:
-                        usage = response_json.get("usage", {})
-                        model_name = response_json.get("model", "?")
-                        finish_reason = ""
-                        if response_json.get("choices"):
-                            finish_reason = response_json["choices"][0].get("finish_reason", "?")
-                        _print_verbose(usage, model_name, finish_reason)
-                        
+                    usage = response_json.get("usage", {})
+                    model_name = response_json.get("model", "?")
+                    finish_reason = ""
+                    if response_json.get("choices"):
+                        finish_reason = response_json["choices"][0].get(
+                            "finish_reason", "?"
+                        )
+                    _print_verbose(usage, model_name, finish_reason)
+
                 HISTORY.append({"role": "assistant", "content": assistant_message})
             else:
-                print(f"{RED}Query error: {response.status_code} - {response.text}{RESET}")
+                print(
+                    f"{RED}Query error: {response.status_code} - {response.text}{RESET}"
+                )
 
     except requests.RequestException as e:
         print(f"{RED}Query error: {e}{RESET}")
+
 
 # Function for remove model
 def remove_model(model):
@@ -299,9 +345,15 @@ def remove_model(model):
 def pull_model(model):
 
     if model is None or model == "":
-        repo = input(f"{CYAN}Repo ID{RESET} ( example: punchnox/Tinnyllama-1.1B-rk3588-rkllm-1.1.4 ): ")
-        filename = input(f"{CYAN}File{RESET} ( example: TinyLlama-1.1B-Chat-v1.0-rk3588-w8a8-opt-0-hybrid-ratio-0.5.rkllm ): ")
-        model_name = input(f"{CYAN}Custom Model Name{RESET} ( example: tinyllama-chat:1.1b ): ")
+        repo = input(
+            f"{CYAN}Repo ID{RESET} ( example: punchnox/Tinnyllama-1.1B-rk3588-rkllm-1.1.4 ): "
+        )
+        filename = input(
+            f"{CYAN}File{RESET} ( example: TinyLlama-1.1B-Chat-v1.0-rk3588-w8a8-opt-0-hybrid-ratio-0.5.rkllm ): "
+        )
+        model_name = input(
+            f"{CYAN}Custom Model Name{RESET} ( example: tinyllama-chat:1.1b ): "
+        )
         # Construct the repo and filename of the model choosed
         model = repo.strip() + "/" + filename.strip()
     else:
@@ -309,7 +361,11 @@ def pull_model(model):
         model, model_name = model.rsplit("/", 1)
 
     try:
-        response = requests.post(API_URL + "pull", json={"model": model, "model_name": model_name}, stream=True)
+        response = requests.post(
+            API_URL + "pull",
+            json={"model": model, "model_name": model_name},
+            stream=True,
+        )
 
         if response.status_code != 200:
             print(f"{RED}Error: Received status code {response.status_code}.{RESET}")
@@ -327,9 +383,9 @@ def pull_model(model):
         for line in response.iter_lines(decode_unicode=True):
             if line:
                 line = line.strip()
-                if line.endswith('%'):  # Checks if the line contains a percentage
+                if line.endswith("%"):  # Checks if the line contains a percentage
                     try:
-                        progress = int(line.strip('%'))
+                        progress = int(line.strip("%"))
                         update_progress(progress)
                     except ValueError:
                         print(f"\n{line}")  # Displays non-numeric messages
@@ -346,7 +402,7 @@ def chat(model):
     global VERBOSE, STREAM_MODE, HISTORY, PREFIX_MESSAGE
     os.system("clear")
     print_help_chat()
-    
+
     while True:
         user_input = input(f"{CYAN}You:{RESET} ")
 
@@ -380,13 +436,15 @@ def chat(model):
             # If content is not a command, then send content to template
             send_message(model, user_input)
 
+
 def update():
-    README_URL   = "https://raw.githubusercontent.com/NotPunchnox/rkllama/refs/heads/main/README.md"
-    INSTALL_URL  = "git+https://github.com/NotPunchnox/rkllama.git"
+    README_URL = "https://raw.githubusercontent.com/NotPunchnox/rkllama/refs/heads/main/README.md"
+    INSTALL_URL = "git+https://github.com/NotPunchnox/rkllama.git"
 
     # current installed version
     try:
         import importlib.metadata
+
         current_version = importlib.metadata.version("rkllama")
     except Exception:
         current_version = "unknown"
@@ -399,7 +457,7 @@ def update():
         print(f"{RED}Unable to reach GitHub: {e}{RESET}")
         return
 
-    match = re.search(r'###\s*\[Version:\s*([\d.]+)\]', readme_response.text)
+    match = re.search(r"###\s*\[Version:\s*([\d.]+)\]", readme_response.text)
     if not match:
         print(f"{RED}Could not find version in remote README.{RESET}")
         return
@@ -420,10 +478,10 @@ def update():
         status_text = f"{YELLOW}Update available{RESET}"
 
     # Pretty table display
-    _ansi_re = re.compile(r'\033\[[0-9;]*m')
+    _ansi_re = re.compile(r"\033\[[0-9;]*m")
 
     def visible_len(s):
-        return len(_ansi_re.sub('', str(s)))
+        return len(_ansi_re.sub("", str(s)))
 
     W = 76  # inner visible width
 
@@ -438,15 +496,17 @@ def update():
     print(f"\n{CYAN}{BOLD}Update check:{RESET}")
     print(sep_top)
     print(row("Installed version", f"{BOLD}{current_version}{RESET}"))
-    print(row("Latest version",    f"{BOLD}{remote_version}{RESET}"))
-    print(row("Status",            f"{status_text}"))
+    print(row("Latest version", f"{BOLD}{remote_version}{RESET}"))
+    print(row("Status", f"{status_text}"))
     print(sep_bot)
 
     if parse_version(remote_version) <= parse_version(current_version):
         print(f"\n{GREEN}Already up to date.{RESET}")
         return
 
-    print(f"\n{GREEN}A new version is available: {BOLD}{remote_version}{RESET}{GREEN} (current: {current_version}){RESET}")
+    print(
+        f"\n{GREEN}A new version is available: {BOLD}{remote_version}{RESET}{GREEN} (current: {current_version}){RESET}"
+    )
 
     # confirmation
     confirm = input(f"{CYAN}Update now? [y/N]:{RESET} ").strip().lower()
@@ -458,7 +518,9 @@ def update():
     print(f"\n{YELLOW}Installing latest version...{RESET}")
     install = subprocess.run([sys.executable, "-m", "pip", "install", INSTALL_URL])
     if install.returncode == 0:
-        print(f"\n{GREEN}{BOLD}Update successful!{RESET} Restart rkllama_client to use version {remote_version}.")
+        print(
+            f"\n{GREEN}{BOLD}Update successful!{RESET} Restart rkllama_client to use version {remote_version}."
+        )
     else:
         print(f"\n{RED}Installation failed. Check the output above.{RESET}")
 
@@ -467,25 +529,27 @@ def show_model_info(model_name):
     try:
         # Préparer les données pour la requête POST
         data = {"name": model_name}
-        
+
         # Envoyer la requête POST à l'endpoint /api/show
         response = requests.post(API_URL + "api/show", json=data)
-        
+
         if response.status_code == 200:
             model_info = response.json()
-            
+
             # Display model information as an English table
-            _ansi_re = re.compile(r'\033\[[0-9;]*m')
+            _ansi_re = re.compile(r"\033\[[0-9;]*m")
 
             def visible_len(s):
-                return len(_ansi_re.sub('', str(s)))
+                return len(_ansi_re.sub("", str(s)))
 
             W = 80  # inner visible width
 
             def row(label, value):
                 prefix = f"  {label:<20} "
                 pad = W - len(prefix) - visible_len(value)
-                return f"{YELLOW}│{RESET}{prefix}{value}{' ' * max(pad,0)}{YELLOW}│{RESET}"
+                return (
+                    f"{YELLOW}│{RESET}{prefix}{value}{' ' * max(pad,0)}{YELLOW}│{RESET}"
+                )
 
             sep_top = f"{YELLOW}┌{'─' * W}┐{RESET}"
             sep_mid = f"{YELLOW}├{'─' * W}┤{RESET}"
@@ -497,7 +561,9 @@ def show_model_info(model_name):
             quant = details.get("quantization_level", "?")
             family = details.get("family", "?")
             size_bytes = model_info.get("size", 0)
-            size_gb = size_bytes / (1024 ** 3) if isinstance(size_bytes, (int, float)) else "?"
+            size_gb = (
+                size_bytes / (1024**3) if isinstance(size_bytes, (int, float)) else "?"
+            )
             modified_at = model_info.get("modified_at", "?")
             license_ = model_info.get("license", "?")
             system_prompt = model_info.get("system") or "None"
@@ -510,7 +576,16 @@ def show_model_info(model_name):
             print(row("Family", f"{family}"))
             print(row("Parameter size", f"{parameters}"))
             print(row("Quantization", f"{quant}"))
-            print(row("Size (GB)", f"{GREEN}{size_gb:.2f} GB{RESET}" if isinstance(size_gb, float) else f"{size_gb}"))
+            print(
+                row(
+                    "Size (GB)",
+                    (
+                        f"{GREEN}{size_gb:.2f} GB{RESET}"
+                        if isinstance(size_gb, float)
+                        else f"{size_gb}"
+                    ),
+                )
+            )
             print(sep_mid)
             print(row("Modified at", f"{CYAN}{modified_at}{RESET}"))
             print(row("License", f"{license_}"))
@@ -542,7 +617,7 @@ def show_model_info(model_name):
                 # For long values, convert to short string
                 val_str = str(v)
                 if len(val_str) > W - 30:
-                    val_str = val_str[:W - 33] + "..."
+                    val_str = val_str[: W - 33] + "..."
                 print(row(k, val_str))
 
             print(sep_bot)
@@ -552,7 +627,9 @@ def show_model_info(model_name):
         elif response.status_code == 404:
             print(f"{RED}Error: Model '{model_name}' not found{RESET}")
         else:
-            print(f"{RED}Error retrieving model info: {response.status_code} - {response.text}{RESET}")
+            print(
+                f"{RED}Error retrieving model info: {response.status_code} - {response.text}{RESET}"
+            )
     except requests.RequestException as e:
         print(f"{RED}Query error: {e}{RESET}")
 
@@ -566,7 +643,7 @@ def main():
     # Parse host and port from command line arguments
     host = "127.0.0.1"  # default host
     filtered_args = []
-    
+
     for arg in sys.argv:
         if arg.startswith("--host="):
             host = arg.split("=")[1]
@@ -574,7 +651,7 @@ def main():
             PORT = arg.split("=")[1]
         else:
             filtered_args.append(arg)
-    
+
     # Update sys.argv with filtered arguments
     sys.argv = filtered_args
 
@@ -588,8 +665,10 @@ def main():
 
     command = sys.argv[1]
 
-    if check_status() != 200 and command not in ['serve', 'update']:
-        print(f"{RED}Error: Server not started or not accessible at {API_URL}!\n{RESET}rkllama serve{CYAN} command to start the server.{RESET}")
+    if check_status() != 200 and command not in ["serve", "update"]:
+        print(
+            f"{RED}Error: Server not started or not accessible at {API_URL}!\n{RESET}rkllama serve{CYAN} command to start the server.{RESET}"
+        )
         sys.exit(0)
 
     # Start of condition sequence
@@ -600,8 +679,10 @@ def main():
         if len(sys.argv) > 2:
             PORT = sys.argv[2]
 
-        server_script = os.path.join(rkllama.config.get_path(), 'server.sh')
-        os.system(f"bash {server_script} {'--no-conda' if use_no_conda else ''} --port={PORT}")
+        server_script = os.path.join(rkllama.config.get_path(), "server.sh")
+        os.system(
+            f"bash {server_script} {'--no-conda' if use_no_conda else ''} --port={PORT}"
+        )
 
     elif command == "update":
         update()
@@ -630,16 +711,16 @@ def main():
         elif len(sys.argv) == 3:
             if load_model(sys.argv[2]):
                 chat(sys.argv[2])
-            
+
     elif command == "rm":
         if len(sys.argv) < 3:
             print(f"{RED}Error: You must specify the model name.{RESET}")
         else:
             remove_model(sys.argv[2])
-    
+
     elif command == "pull":
         pull_model(sys.argv[2] if len(sys.argv) > 2 else "")
-    
+
     elif command == "info":
         if len(sys.argv) < 3:
             print(f"{RED}Error: You must specify the model name.{RESET}")

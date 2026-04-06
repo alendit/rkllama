@@ -16,8 +16,8 @@ RKLLAMA now implements an Ollama-compatible API, providing an interface that mat
 | `/api/delete` | DELETE | Delete a model | ✅ |
 | `/api/generate` | POST | Generate a completion | ✅ |
 | `/api/chat` | POST | Generate a chat completion | ✅ **With Tool Calling** |
-| `/api/embeddings` | POST | Generate embeddings | ❌ Not implemented |
-| `/api/embed` | POST | Generate embeddings | ❌ Not implemented |
+| `/api/embeddings` | POST | Generate embeddings | ✅ |
+| `/api/embed` | POST | Generate embeddings | ✅ |
 
 ## Usage Examples
 
@@ -177,12 +177,10 @@ Recent updates have significantly improved streaming reliability:
 
 ## Limitations
 
-- Only core endpoints (`/api/chat` and `/api/generate`) are fully implemented
 - Pull and Create endpoints have basic implementations
-- Embeddings API is not currently implemented
 - Some advanced Ollama formatting features are not yet supported
 - Not all Ollama clients have been tested for compatibility
-- OpenAI API compatibility is still in development
+- OpenAI API compatibility is intentionally scoped to the core text/model endpoints above
 
 ## Troubleshooting Tips
 
