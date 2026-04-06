@@ -22,6 +22,7 @@ from .format_utils import (
     responses_input_to_messages,
 )
 from .model_utils import get_property_modelfile
+from .worker import WORKER_TASK_ERROR, worker_error_message
 import rkllama.config
 
 # Check for debug mode using the improved method from config
@@ -139,6 +140,24 @@ class EndpointHandler:
 
         # Return the tokens
         return tokenized, prompt_cache_file, final_prompt
+
+    @staticmethod
+    def get_context_limit(options=None):
+        options = options or {}
+        return int(
+            float(options.get("num_ctx", rkllama.config.get("model", "default_num_ctx")))
+        )
+
+    @classmethod
+    def validate_prompt_context(cls, tokenized, model_name, options=None):
+        context_limit = cls.get_context_limit(options)
+        token_count = len(tokenized or [])
+        if token_count <= context_limit:
+            return None
+        return (
+            f"Prompt is too long for model '{model_name}': "
+            f"{token_count} tokens exceeds max context {context_limit}."
+        )
 
     @staticmethod
     def add_image_tag_to_last_user_message(messages):
@@ -368,6 +387,11 @@ class ChatEndpointHandler(EndpointHandler):
                 final_prompt, prompt_cache_file, _ = cls.prepare_prompt(
                     model_name, messages, system, tools, enable_thinking, images
                 )
+                context_error = cls.validate_prompt_context(
+                    final_prompt, model_name, options
+                )
+                if context_error:
+                    return jsonify({"error": context_error}), 400
 
             else:
                 if DEBUG_MODE:
@@ -507,6 +531,13 @@ class ChatEndpointHandler(EndpointHandler):
                     thread_finished = True
 
                 # Checking if finished inference
+                if (
+                    isinstance(token, tuple)
+                    and len(token) == 2
+                    and token[0] == WORKER_TASK_ERROR
+                ):
+                    raise RuntimeError(worker_error_message(token))
+
                 if isinstance(token, tuple):
                     thread_finished = True
                     # Get the stats from the inference
@@ -701,6 +732,13 @@ class ChatEndpointHandler(EndpointHandler):
                 thread_finished = True
 
             # Checking if finished inference
+            if (
+                isinstance(token, tuple)
+                and len(token) == 2
+                and token[0] == WORKER_TASK_ERROR
+            ):
+                raise RuntimeError(worker_error_message(token))
+
             if isinstance(token, tuple):
                 thread_finished = True
                 # Get the stats from the inference
@@ -773,6 +811,10 @@ class ResponsesEndpointHandler(EndpointHandler):
     def _sse_event(event_type: str, payload: dict[str, Any]) -> str:
         event_payload = {"type": event_type, **payload}
         return f"event: {event_type}\ndata: {json.dumps(event_payload)}\n\n"
+
+    @classmethod
+    def _sse_response_event(cls, event_type: str, response: dict[str, Any]) -> str:
+        return cls._sse_event(event_type, {"response": response})
 
     @staticmethod
     def _stringify_content(content: Any) -> str:
@@ -982,6 +1024,25 @@ class ResponsesEndpointHandler(EndpointHandler):
         response_id = cls._new_response_id()
 
         if stream:
+            if isinstance(chat_result, tuple):
+                chat_response, code = chat_result
+                message = "Request failed"
+                try:
+                    chat_payload = json.loads(chat_response.get_data().decode("utf-8"))
+                    message = str(chat_payload.get("error") or message)
+                except Exception:
+                    pass
+                return (
+                    jsonify(
+                        {
+                            "error": {
+                                "type": "invalid_request_error",
+                                "message": message,
+                            }
+                        }
+                    ),
+                    code,
+                )
             chat_response = chat_result
             created_at = int(time.time())
 
@@ -993,11 +1054,13 @@ class ResponsesEndpointHandler(EndpointHandler):
                 yield cls._sse_event(
                     "response.created",
                     {
-                        "id": response_id,
-                        "object": "response",
-                        "created_at": created_at,
-                        "status": "in_progress",
-                        "model": model_name,
+                        "response": {
+                            "id": response_id,
+                            "object": "response",
+                            "created_at": created_at,
+                            "status": "in_progress",
+                            "model": model_name,
+                        }
                     },
                 )
                 try:
@@ -1079,7 +1142,7 @@ class ResponsesEndpointHandler(EndpointHandler):
                         },
                     )
 
-                yield cls._sse_event("response.completed", response_object)
+                yield cls._sse_response_event("response.completed", response_object)
 
             return Response(
                 stream_with_context(generate()), mimetype="text/event-stream"
@@ -1087,7 +1150,23 @@ class ResponsesEndpointHandler(EndpointHandler):
 
         chat_response, code = chat_result
         if code != 200:
-            return chat_response, code
+            message = "Request failed"
+            try:
+                chat_payload = json.loads(chat_response.get_data().decode("utf-8"))
+                message = str(chat_payload.get("error") or message)
+            except Exception:
+                pass
+            return (
+                jsonify(
+                    {
+                        "error": {
+                            "type": "invalid_request_error",
+                            "message": message,
+                        }
+                    }
+                ),
+                code,
+            )
         chat_payload = json.loads(chat_response.get_data().decode("utf-8"))
         response_object = cls._response_object(
             response_id=response_id,

@@ -41,11 +41,19 @@ def _load_server_utils_module(monkeypatch):
     config_module = types.ModuleType("rkllama.config")
     config_module.is_debug_mode = lambda: False
     config_module.get_path = lambda name: "/tmp"
+    config_module.get = lambda section, key: 4096
     rkllama_pkg.config = config_module
 
     variables_module = types.ModuleType("rkllama.api.variables")
     model_utils_module = types.ModuleType("rkllama.api.model_utils")
     model_utils_module.get_property_modelfile = lambda *args, **kwargs: None
+    worker_module = types.ModuleType("rkllama.api.worker")
+    worker_module.WORKER_TASK_ERROR = "<RKLLM_TASK_ERROR>"
+    worker_module.worker_error_message = (
+        lambda value: value[1]
+        if isinstance(value, tuple) and len(value) == 2
+        else "Worker task failed"
+    )
 
     format_utils_module = types.ModuleType("rkllama.api.format_utils")
     format_utils_module.create_format_instruction = lambda *args, **kwargs: None
@@ -71,6 +79,7 @@ def _load_server_utils_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "rkllama.config", config_module)
     monkeypatch.setitem(sys.modules, "rkllama.api.variables", variables_module)
     monkeypatch.setitem(sys.modules, "rkllama.api.model_utils", model_utils_module)
+    monkeypatch.setitem(sys.modules, "rkllama.api.worker", worker_module)
     monkeypatch.setitem(sys.modules, "rkllama.api.format_utils", format_utils_module)
     monkeypatch.setitem(sys.modules, "transformers", transformers_module)
 
@@ -331,12 +340,142 @@ def test_responses_handler_emits_completed_event_after_stream_error(monkeypatch)
     payloads = [json.loads(chunk.split("data: ", 1)[1]) for chunk in chunks]
 
     assert payloads[0]["type"] == "response.created"
+    assert payloads[0]["response"]["id"].startswith("resp_")
+    assert payloads[0]["response"]["status"] == "in_progress"
     assert payloads[1]["type"] == "response.output_text.delta"
     assert payloads[-1]["type"] == "response.completed"
-    assert payloads[-1]["status"] == "incomplete"
-    assert payloads[-1]["error"] == {
+    assert payloads[-1]["response"]["status"] == "incomplete"
+    assert payloads[-1]["response"]["error"] == {
         "type": "server_error",
         "message": "upstream stream crashed",
+    }
+
+
+def test_responses_handler_wraps_completed_payload_under_response(monkeypatch):
+    module = _load_server_utils_module(monkeypatch)
+
+    class FakeChatResponse:
+        def __init__(self):
+            self.response = self._iter_chunks()
+
+        @staticmethod
+        def _iter_chunks():
+            yield json.dumps(
+                {
+                    "message": {"role": "assistant", "content": "Hello"},
+                    "done": False,
+                }
+            ).encode("utf-8")
+            yield json.dumps(
+                {
+                    "message": {"role": "assistant", "content": ""},
+                    "prompt_eval_count": 4,
+                    "eval_count": 2,
+                    "done": True,
+                }
+            ).encode("utf-8")
+
+    monkeypatch.setattr(
+        module.ChatEndpointHandler,
+        "handle_request",
+        classmethod(lambda cls, **kwargs: FakeChatResponse()),
+    )
+    monkeypatch.setattr(module, "stream_with_context", lambda value: value)
+
+    response = module.ResponsesEndpointHandler.handle_request(
+        model_name="qwen3:0.6b",
+        input_data="hi",
+        stream=True,
+        request_data={},
+    )
+
+    payloads = [
+        json.loads(chunk.split("data: ", 1)[1]) for chunk in list(response.response)
+    ]
+    completed = payloads[-1]
+
+    assert completed == {
+        "type": "response.completed",
+        "response": {
+            "id": completed["response"]["id"],
+            "object": "response",
+            "created_at": completed["response"]["created_at"],
+            "status": "completed",
+            "model": "qwen3:0.6b",
+            "output": [
+                {
+                    "id": completed["response"]["output"][0]["id"],
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Hello",
+                            "annotations": [],
+                        }
+                    ],
+                }
+            ],
+            "output_text": "Hello",
+            "usage": {
+                "input_tokens": 4,
+                "output_tokens": 2,
+                "total_tokens": 6,
+            },
+            "parallel_tool_calls": True,
+            "reasoning": None,
+            "instructions": None,
+            "input": [],
+            "error": None,
+        },
+    }
+
+
+def test_validate_prompt_context_rejects_over_limit(monkeypatch):
+    module = _load_server_utils_module(monkeypatch)
+
+    error = module.EndpointHandler.validate_prompt_context(
+        [1, 2, 3, 4, 5], "qwen3:0.6b", {"num_ctx": 4}
+    )
+
+    assert error == (
+        "Prompt is too long for model 'qwen3:0.6b': 5 tokens exceeds max context 4."
+    )
+
+
+def test_responses_handler_converts_stream_preflight_errors(monkeypatch):
+    module = _load_server_utils_module(monkeypatch)
+
+    class FakeJsonResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def get_data(self):
+            return json.dumps(self.payload).encode("utf-8")
+
+    monkeypatch.setattr(
+        module.ChatEndpointHandler,
+        "handle_request",
+        classmethod(
+            lambda cls, **kwargs: (FakeJsonResponse({"error": "prompt too long"}), 400)
+        ),
+    )
+    monkeypatch.setattr(module, "jsonify", lambda payload: types.SimpleNamespace(json=payload))
+
+    response, status_code = module.ResponsesEndpointHandler.handle_request(
+        model_name="qwen3:0.6b",
+        input_data="hi",
+        stream=True,
+        request_data={},
+    )
+
+    assert status_code == 400
+    assert response.json == {
+        "error": {
+            "type": "invalid_request_error",
+            "message": "prompt too long",
+        }
     }
 
 

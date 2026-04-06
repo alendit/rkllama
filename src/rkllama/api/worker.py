@@ -37,6 +37,29 @@ WORKER_TASK_GENERATE_TRANSCRIPTION = "GENERATE_TRANSCRIPTION"
 WORKER_TASK_GENERATE_TRANSLATION = "GENERATE_TRANSLATION"
 
 
+def worker_error_payload(message):
+    return (WORKER_TASK_ERROR, str(message))
+
+
+def is_worker_error(value):
+    return (
+        value == WORKER_TASK_ERROR
+        or (
+            isinstance(value, tuple)
+            and len(value) == 2
+            and value[0] == WORKER_TASK_ERROR
+        )
+    )
+
+
+def worker_error_message(value):
+    if isinstance(value, tuple) and len(value) == 2 and value[0] == WORKER_TASK_ERROR:
+        return str(value[1])
+    if value == WORKER_TASK_ERROR:
+        return "Worker task failed"
+    return None
+
+
 def run_encoder(model_input):
     """
     Run the vision encoder to get the image embedding
@@ -191,7 +214,7 @@ def run_rkllm_worker(
     except Exception as e:
         logger.error(f"Failed creating the worker for model '{name}': {str(e)}")
         # Announce the creation of the RKLLM model in memory
-        worker_pipe.send(WORKER_TASK_ERROR)
+        worker_pipe.send(worker_error_payload(str(e)))
         return
 
     # Loop to wait for tasks
@@ -329,7 +352,7 @@ def run_rkllm_worker(
                 f"Failed executing task the worker for model '{name}': {str(e)}"
             )
             # Announce the creation of the RKLLM model in memory
-            worker_pipe.send(WORKER_TASK_ERROR)
+            worker_pipe.send(worker_error_payload(str(e)))
 
 
 # RKNN Worker
@@ -1084,7 +1107,7 @@ class WorkerManager:
                 # Error ENcoding the image. Return
                 return None
 
-            if isinstance(image_embed, str) and image_embed == WORKER_TASK_ERROR:
+            if is_worker_error(image_embed):
                 # Error ENcoding the image. Return
                 return None
 
@@ -1365,8 +1388,13 @@ class Worker:
             self.process.terminate()
             return False
 
-        if creation_status == WORKER_TASK_ERROR:
+        if is_worker_error(creation_status):
             # Error loading the RKLLM Model. Wait for the worker to exit
+            logger.error(
+                "Worker creation failed for model %s: %s",
+                self.worker_model_info.model,
+                worker_error_message(creation_status),
+            )
             self.process.terminate()
             return False
 
